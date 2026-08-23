@@ -112,12 +112,17 @@ Decisions worth keeping:
 
 ## 6. Versioning, releases, deployment
 
-All inherited from CountRoster deliberately, so the two projects operate
-identically:
+All inherited from the sibling projects deliberately (the release/deploy
+machinery from CountRoster, the version scheme from sand-vault), so they all
+operate identically:
 
-- `vMAJOR.MINOR.<commit count>` assembled only by `scripts/version.mjs`;
-  stamped into the Go binary by `-ldflags` and into the bundle by Vite
-  `define`. Shallow clones are refused (they'd silently report patch 1).
+- Calendar versioning `vYEAR.MONTH.<commit count>` assembled only by
+  `scripts/version.mjs`: year and month are hand-bumped source constants in
+  `internal/version/version.go` (never the build clock — that would move the
+  version without a commit), the month unpadded so the tag stays valid semver,
+  and the patch is the commit count. Stamped into the Go binary by `-ldflags`
+  and into the bundle by Vite `define`. Shallow clones are refused (they'd
+  silently report patch 1).
 - `.github/workflows/release.yml` publishes static per-arch binaries with the
   PWA embedded and `.sha256` files, body from `CHANGELOG.md`, and refuses a
   tag that doesn't match the commit count.

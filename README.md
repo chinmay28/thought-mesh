@@ -83,9 +83,15 @@ npm run typecheck    # tsc --noEmit + `go vet`
 
 ## Versioning
 
-`vMAJOR.MINOR.<commit count>` — every commit is a patch release, stamped into
-the binary and the web bundle at build time by `scripts/version.mjs`. The
-version in the app header and in `/api/health` always agree.
+`vYEAR.MONTH.<commit count>` — a calendar version where every commit is a
+patch release: `v2026.8.311` is the 311th commit on the 2026.8 line. The year
+and month are source constants in
+[`server/internal/version/version.go`](./server/internal/version/version.go),
+bumped by hand when a release line opens (never taken from the build clock);
+the patch number is the git commit count, stamped into the binary and the web
+bundle at build time by [`scripts/version.mjs`](./scripts/version.mjs). The
+version in the app header and in `/api/health` always agree; a version ending
+in `.0` is an unstamped development build.
 
 ## License
 

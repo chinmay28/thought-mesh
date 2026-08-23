@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
  * The app version, for inlining into the bundle at build time.
  *
  * Delegates to scripts/version.mjs at the repo root — the single place
- * MAJOR.MINOR (Go source constants) and PATCH (the git commit count) are
+ * YEAR.MONTH (Go source constants) and PATCH (the git commit count) are
  * assembled, so the PWA and the Go binary always report the same number.
  *
  * Shelling out rather than importing keeps this file inside the web

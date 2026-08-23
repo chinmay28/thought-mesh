@@ -18,7 +18,8 @@ name: Release
 # The release body is the matching section of CHANGELOG.md (see that file's
 # header).
 #
-# NOTE the version is `vMAJOR.MINOR.<commit count>` (scripts/version.mjs), so
+# NOTE the version is the calendar `vYEAR.MONTH.<commit count>`
+# (scripts/version.mjs), so
 # this workflow needs `fetch-depth: 0` — a shallow checkout reports patch 0 —
 # and it refuses to publish if the tag doesn't equal the version the build
 # stamps into the binary.
@@ -32,7 +33,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to release this ref as (e.g. v0.1.42); created if absent'
+        description: 'Tag to release this ref as (e.g. v2026.8.42); created if absent'
         required: true
 
 permissions:
