@@ -1,0 +1,176 @@
+name: Release
+
+# Publishes a GitHub release with the deployable binaries.
+#
+# Three ways in, all releasing the commit they run on:
+#
+#   * push a `v*` tag                 — the usual way
+#   * push a `release/v*` branch      — same thing where tag pushes aren't
+#                                       allowed; the release creates the tag
+#   * run it by hand (workflow_dispatch) naming the tag to create
+#
+# The artifact is the deployable unit described in README.md: a single static
+# Go binary (CGO_ENABLED=0) with the built PWA embedded, so a target host needs
+# no Node, no Go, and no source tree. `scripts/quickstart.sh` consumes exactly
+# these assets when run with THOUGHTMESH_INSTALL=release — the asset names are
+# the contract between the two.
+#
+# The release body is the matching section of CHANGELOG.md (see that file's
+# header).
+#
+# NOTE the version is `vMAJOR.MINOR.<commit count>` (scripts/version.mjs), so
+# this workflow needs `fetch-depth: 0` — a shallow checkout reports patch 0 —
+# and it refuses to publish if the tag doesn't equal the version the build
+# stamps into the binary.
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - 'release/v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release this ref as (e.g. v0.1.42); created if absent'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    env:
+      # Space-separated GOARCH list. Cross-compiling is free here because the
+      # tree is pure Go — no cgo anywhere.
+      GOARCHES: arm64 amd64
+
+    steps:
+      - name: Check out ${{ github.ref_name }}
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the version's patch number is the commit count
+
+      - name: Resolve the release tag
+        run: |
+          set -euo pipefail
+          case "$GITHUB_REF" in
+            refs/tags/*)          tag="${GITHUB_REF#refs/tags/}" ;;
+            refs/heads/release/*) tag="${GITHUB_REF#refs/heads/release/}" ;;
+            *)                    tag="${{ inputs.tag }}" ;;
+          esac
+          [ -n "$tag" ] || { echo "::error::no tag to release ($GITHUB_REF)"; exit 1; }
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "releasing $GITHUB_SHA as $tag"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+
+      - name: Verify the tag matches the built version
+        run: |
+          set -euo pipefail
+          version="$(node scripts/version.mjs)"
+          echo "tag=$TAG version=$version"
+          if [ "$version" != "$TAG" ]; then
+            echo "::error::tag $TAG does not match the version this commit builds ($version)."
+            echo "The patch number is the commit count — tag the commit whose count matches."
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the web client
+        run: npm run build --workspace @thoughtmesh/web
+
+      - name: Embed the PWA into the server
+        run: |
+          set -euo pipefail
+          find server/cmd/thoughtmesh/webdist -mindepth 1 ! -name README.txt -delete
+          cp -r apps/web/dist/. server/cmd/thoughtmesh/webdist/
+
+      - name: Build static binaries
+        run: |
+          set -euo pipefail
+          patch="$(node scripts/version.mjs --patch)"
+          mkdir -p dist
+          for arch in $GOARCHES; do
+            out="dist/thoughtmesh-linux-$arch"
+            echo "==> building $out ($TAG)"
+            # CGO_ENABLED=0 → a fully static binary; keep it that way.
+            (cd server && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build \
+              -trimpath \
+              -ldflags "-s -w -X github.com/chinmay28/thought-mesh/server/internal/version.Patch=$patch" \
+              -o "../$out" ./cmd/thoughtmesh)
+            file "$out"
+          done
+          (cd dist && for f in thoughtmesh-linux-*; do sha256sum "$f" > "$f.sha256"; done)
+          ls -lh dist
+
+      - name: Assemble the release notes from CHANGELOG.md
+        id: notes
+        run: |
+          set -euo pipefail
+          # The section for this tag, from its `## <tag>` heading to the next one.
+          awk -v tag="$TAG" '
+            $0 ~ "^## " tag "([^0-9.]|$)" { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+
+          heading="$(grep -m1 -E "^## $TAG([^0-9.]|\$)" CHANGELOG.md || true)"
+          # Strip "## <tag>" and the dash that separates it from the title. Done
+          # with parameter expansion, not a bracket expression, so the em dash
+          # matches byte-wise regardless of the runner's locale.
+          title="${heading#\#\# }"; title="${title#"$TAG"}"
+          title="${title# }"; title="${title#—}"; title="${title#-}"; title="${title# }"
+
+          if [ -s release-notes.md ]; then
+            echo "title=$TAG — ${title:-$TAG}" >> "$GITHUB_OUTPUT"
+            # GitHub only auto-links a full changelog when it generates the
+            # notes itself, so add the compare link to the curated body.
+            prev="$(git tag --list 'v*' --sort=-version:refname | grep -vFx "$TAG" | head -n 1 || true)"
+            if [ -n "$prev" ]; then
+              printf '\n**Full Changelog**: %s/compare/%s...%s\n' \
+                "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "$prev" "$TAG" >> release-notes.md
+            fi
+          else
+            echo "::warning::no '## $TAG' section in CHANGELOG.md — publishing with generated notes instead."
+            echo "title=$TAG" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: ${{ steps.notes.outputs.title }}
+        run: |
+          set -euo pipefail
+          if [ -s release-notes.md ]; then
+            notes_args=(--notes-file release-notes.md)
+          else
+            notes_args=(--generate-notes)
+          fi
+          # --target creates the tag at this commit when it doesn't exist yet,
+          # which is what a `release/v*` branch push relies on. It is ignored
+          # when the tag is already there.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "==> release $TAG already exists; updating notes and assets"
+            # `gh release edit` has no --generate-notes, so only rewrite the
+            # body when there is a curated one to write.
+            if [ -s release-notes.md ]; then
+              gh release edit "$TAG" --title "$TITLE" --notes-file release-notes.md
+            fi
+            gh release upload "$TAG" dist/thoughtmesh-linux-* --clobber
+          else
+            gh release create "$TAG" --target "$GITHUB_SHA" \
+              --title "$TITLE" "${notes_args[@]}" dist/thoughtmesh-linux-*
+          fi
+          gh release view "$TAG" --json tagName,assets --jq '{tag: .tagName, assets: [.assets[].name]}'

@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="112" fill="#1e1b2e"/>
+
+  <!-- The mesh: notes as nodes, wikilinks as the threads between them -->
+  <g stroke="#4a4468" stroke-width="14" stroke-linecap="round">
+    <line x1="256" y1="252" x2="150" y2="136"/>
+    <line x1="256" y1="252" x2="368" y2="122"/>
+    <line x1="256" y1="252" x2="396" y2="312"/>
+    <line x1="256" y1="252" x2="238" y2="400"/>
+    <line x1="256" y1="252" x2="120" y2="330"/>
+    <line x1="150" y1="136" x2="368" y2="122"/>
+    <line x1="120" y1="330" x2="238" y2="400"/>
+  </g>
+
+  <!-- Outer notes -->
+  <g fill="#f5f4fa">
+    <circle cx="150" cy="136" r="34"/>
+    <circle cx="368" cy="122" r="30"/>
+    <circle cx="396" cy="312" r="30"/>
+    <circle cx="238" cy="400" r="34"/>
+    <circle cx="120" cy="330" r="28"/>
+  </g>
+
+  <!-- The note in hand -->
+  <circle cx="256" cy="252" r="58" fill="#9f8bfa"/>
+  <circle cx="256" cy="252" r="58" fill="none" stroke="#c9bdfc" stroke-width="8"/>
+</svg>
