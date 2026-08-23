@@ -7,6 +7,7 @@ import { NotePage } from './pages/NotePage.tsx';
 import { NewNotePage } from './pages/NewNotePage.tsx';
 import { GraphPage } from './pages/GraphPage.tsx';
 import { TodayPage } from './pages/TodayPage.tsx';
+import { SyncPage } from './pages/SyncPage.tsx';
 import './styles.css';
 
 const router = createBrowserRouter([
@@ -18,6 +19,7 @@ const router = createBrowserRouter([
       { path: 'new', element: <NewNotePage /> },
       { path: 'graph', element: <GraphPage /> },
       { path: 'today', element: <TodayPage /> },
+      { path: 'sync', element: <SyncPage /> },
       // The splat carries the note's vault path, slashes included.
       { path: 'notes/*', element: <NotePage /> },
     ],

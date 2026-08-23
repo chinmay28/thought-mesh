@@ -48,9 +48,12 @@ npm run dev --workspace @thoughtmesh/web        # PWA on http://localhost:5173, 
 ```
 
 The `serve` subcommand (also the default with no args) takes `--host`, `--port`,
-`--vault`, and `--web-dist` flags; each **overrides** its env-var fallback
-(`HOST`, `PORT`, `THOUGHTMESH_VAULT`, `WEB_DIST`), which overrides the built-in
-default. `thoughtmesh version`/`--version` prints the version.
+`--vault`, `--web-dist`, `--cloud-settings`, `--dropbox-client-id`,
+`--dropbox-client-secret`, and `--public-url` flags; each **overrides** its
+env-var fallback (`HOST`, `PORT`, `THOUGHTMESH_VAULT`, `WEB_DIST`,
+`THOUGHTMESH_CLOUD_SETTINGS`, `THOUGHTMESH_DROPBOX_CLIENT_ID`, …), which
+overrides the built-in default. `thoughtmesh version`/`--version` prints the
+version.
 
 In production the Go binary serves the built `apps/web/dist` (embedded at build
 time or via `--web-dist`) from the same origin with an SPA fallback — one
@@ -110,6 +113,50 @@ Domain errors map in `api.handleErr`: `ValidationError`→400,
 `NotFoundError`→404, `ExistsError`→409. Saves take an optional `base_mtime_ms`
 for optimistic concurrency — a mismatch is a 409, and the client offers "load
 theirs / keep mine".
+
+### Automatic cloud sync lives in `internal/cloud`
+
+`server/internal/cloud` zips the whole vault (`vault.Zip` — every non-hidden
+file, structure preserved) and uploads it to a Dropbox folder on a schedule
+(`off|hourly|daily|weekly|monthly`), configured from the Sync page. Ported
+from CountRoster's cloud backup with the same three layers, and only one of
+them knows a third party exists: `Provider` (OAuth + browse + upload),
+`Service` (settings, token refresh, when the next run is due), `Scheduler`
+(a goroutine polling once a minute). Provider base URLs are struct fields so
+tests point them at `httptest` servers.
+
+Rules to preserve (mostly inherited from CountRoster):
+
+- **Settings and tokens live in a JSON file OUTSIDE the vault**
+  (`cloud.Store`, default `thoughtmesh-cloud.json` beside the vault directory,
+  written 0600 and atomically). Never move this state into the vault: the
+  vault is exactly what users sync/copy/version by other means, and a token
+  inside it leaks with the first push. Tokens **never leave over the API**
+  either — `cloud.PublicSettings` is redacted.
+- **No shipped OAuth identity.** A self-hosted server has an unpredictable
+  origin and providers pre-register redirect URIs, so one shipped client id
+  can't serve every install. Each deployment registers its own Dropbox app;
+  the client id is entered on the Sync page (stored in the settings file) with
+  `--dropbox-client-id` as the fallback — the settings entry wins.
+  `Provider.WithCredentials` is how the resolved pair reaches a provider, so
+  never bake credentials in at construction. Changing a client id disconnects
+  the account: tokens belong to the client that minted them.
+- **`next_run_at` lives in the settings file**, not in a timer — that's what
+  lets a server that was off over its deadline pick the run up on the next
+  tick. Failed runs re-schedule on the same interval, never tight-retry.
+- **Two connect modes.** Redirect (provider → `cloud.CallbackPath`, which
+  bounces the browser back to `/sync?cloud=…`) and paste (`mode: "paste"` →
+  no redirect URI at all; the provider shows a code the user pastes back via
+  `/complete`). Paste exists because the redirect flow needs a pre-registered
+  https origin a LAN server doesn't have. A code issued without a redirect URI
+  **must be redeemed without one** — the pending record threads an empty
+  redirect URI through to `Exchange`.
+
+The cloud routes add two statuses to `api.handleErr`: `cloud.ConfigError`→400
+(a setup gap the caller can close) and `cloud.ProviderError`→502 (the failure
+came from Dropbox). `api.New` takes the service as its third argument and
+skips the routes when it's nil — the web client treats a 404 on
+`GET /api/cloud/sync` as "this server doesn't do cloud sync".
 
 ### The web client renders markdown itself
 
