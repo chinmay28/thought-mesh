@@ -1,0 +1,40 @@
+# Reference systemd unit for Thought Mesh.
+#
+# scripts/quickstart.sh generates a copy of this with the real paths/port filled
+# in and installs it at /etc/systemd/system/thoughtmesh.service. Use this file
+# as documentation, or adapt it for a hand-rolled install.
+#
+# Defaults assumed below (override in quickstart.sh via env vars):
+#   service user : thoughtmesh   (THOUGHTMESH_USER)
+#   source       : /opt/thoughtmesh/src   (THOUGHTMESH_PREFIX/src)
+#   vault        : /var/lib/thoughtmesh/vault   (THOUGHTMESH_DATA_DIR/vault)
+#   port         : 8788   (PORT)
+
+[Unit]
+Description=Thought Mesh — interconnected notes over markdown files (REST API + PWA)
+Documentation=https://github.com/chinmay28/thought-mesh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=thoughtmesh
+Group=thoughtmesh
+WorkingDirectory=/opt/thoughtmesh/src
+ExecStart=/opt/thoughtmesh/src/server/bin/thoughtmesh
+Environment=THOUGHTMESH_VAULT=/var/lib/thoughtmesh/vault
+Environment=PORT=8788
+Environment=HOST=0.0.0.0
+Restart=on-failure
+RestartSec=3
+
+# Hardening — safe on a trusted LAN, defensive if exposure ever widens.
+# The vault's data directory is the only writable path the service needs.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/thoughtmesh
+
+[Install]
+WantedBy=multi-user.target

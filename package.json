@@ -1,0 +1,22 @@
+{
+  "name": "thought-mesh",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Interconnected note taking: a Go server over a folder of plain markdown files, serving an installable PWA with wikilinks, backlinks and a graph.",
+  "license": "AGPL-3.0-only",
+  "author": "Chinmay Manjunath",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present && npm run build:server",
+    "build:server": "cd server && CGO_ENABLED=0 go build -trimpath -ldflags \"-s -w -X github.com/chinmay28/thought-mesh/server/internal/version.Patch=$(node ../scripts/version.mjs --patch)\" -o bin/thoughtmesh ./cmd/thoughtmesh",
+    "test": "npm run test --workspaces --if-present && npm run test:server",
+    "test:server": "cd server && go test ./...",
+    "typecheck": "npm run typecheck --workspaces --if-present && npm run vet:server",
+    "vet:server": "cd server && go vet ./..."
+  },
+  "engines": {
+    "node": ">=20.10.0"
+  }
+}

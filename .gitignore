@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+server/bin/
+server/cmd/thoughtmesh/webdist/*
+!server/cmd/thoughtmesh/webdist/README.txt
+
+# Local data — a development vault must never be committed
+data/
+
+# Editor / OS noise
+.DS_Store
+*.log
+.vscode/
+.idea/
