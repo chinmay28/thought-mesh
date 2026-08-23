@@ -5,7 +5,7 @@ Release notes, newest first. The release workflow
 pushed tag as that release's body — keep the format:
 
 ```
-## v0.1.42 — short title
+## v2026.8.42 — short title
 
 - bullet points
 ```

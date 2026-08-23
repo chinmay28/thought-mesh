@@ -364,7 +364,7 @@ else
   log "cloning $THOUGHTMESH_REPO (ref: $THOUGHTMESH_REF)…"
   mkdir -p "$PREFIX"
   # NOT --depth 1: the version's patch number is the commit count, and a
-  # shallow clone would make every build call itself 0.1.1. --filter=blob:none
+  # shallow clone would make every build call itself patch 1. --filter=blob:none
   # keeps it cheap — the whole commit graph, but only the blobs the checkout
   # actually needs. Fall back to a plain clone if the server or git is too old
   # for partial clone (needs git >= 2.19).

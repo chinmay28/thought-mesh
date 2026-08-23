@@ -121,14 +121,18 @@ it dependency-free. Single newlines render as line breaks (the note-taking
 convention). The editor is a plain textarea with a toolbar and a `[[`
 autocomplete chip bar (see `src/components/Editor.tsx`).
 
-### Versioning is `vMAJOR.MINOR.<commit count>`
+### Versioning is the calendar `vYEAR.MONTH.<commit count>`
 
-Identical scheme and tooling to CountRoster: `Major`/`Minor` are consts in
-`server/internal/version/version.go` (keep them as plain `Major = 0` lines —
-`scripts/version.mjs` parses them by regex); the patch number is the commit
-count, stamped at build time (`-ldflags -X …version.Patch=` for the binary,
-Vite `define` for the bundle). An unstamped build reports patch `0`. **Don't
-assert the literal version string in a test.** The count needs the full commit
+The scheme and tooling come from sand-vault (github.com/chinmay28/sand-vault):
+`Year`/`Month` are consts in `server/internal/version/version.go`, bumped by
+hand when a release line opens — deliberately **not** read from the build
+clock, which would move the version without a commit (keep them as plain
+`Year = 2026` lines — `scripts/version.mjs` parses them by regex, and rejects
+a month outside 1–12). The month is never zero-padded; that keeps the tag
+valid semver. The patch number is the commit count, stamped at build time
+(`-ldflags -X …version.Patch=` for the binary, Vite `define` for the bundle).
+An unstamped build reports patch `0`. **Don't assert the literal version
+string in a test** (the shape is pinned by `internal/version/version_test.go`). The count needs the full commit
 graph: `version.mjs` refuses a shallow repo, `quickstart.sh` clones with
 `--filter=blob:none`, the release workflow checks out with `fetch-depth: 0` —
 keep all three, and don't reintroduce `--depth 1` anywhere that feeds a build.
