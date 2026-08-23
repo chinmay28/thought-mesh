@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/chinmay28/thought-mesh/server/internal/cloud"
 	"github.com/chinmay28/thought-mesh/server/internal/mesh"
 	"github.com/chinmay28/thought-mesh/server/internal/vault"
 	"github.com/chinmay28/thought-mesh/server/internal/version"
@@ -42,9 +43,11 @@ type noteJSON struct {
 	Backlinks []mesh.Backlink `json:"backlinks"`
 }
 
-// New builds the API handler.
-func New(v *vault.Vault, m *mesh.Mesh) http.Handler {
-	s := &server{v: v, m: m}
+// New builds the API handler. `cl` may be nil — a server without cloud sync
+// (an API-only test harness) leaves the cloud routes unregistered, and the
+// web client treats a 404 there as "this server doesn't do cloud sync".
+func New(v *vault.Vault, m *mesh.Mesh, cl *cloud.Service) http.Handler {
+	s := &server{v: v, m: m, cloud: cl}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", s.health)
 	mux.HandleFunc("GET /api/notes", s.listNotes)
@@ -55,6 +58,18 @@ func New(v *vault.Vault, m *mesh.Mesh) http.Handler {
 	mux.HandleFunc("POST /api/rename", s.renameNote)
 	mux.HandleFunc("GET /api/search", s.search)
 	mux.HandleFunc("GET /api/graph", s.graph)
+	if s.cloud != nil {
+		mux.HandleFunc("GET /api/cloud/sync", s.cloudSyncSettings)
+		mux.HandleFunc("PATCH /api/cloud/sync", s.cloudSyncUpdate)
+		mux.HandleFunc("POST /api/cloud/sync/connect", s.cloudSyncConnect)
+		mux.HandleFunc("GET "+cloud.CallbackPath, s.cloudSyncCallback)
+		mux.HandleFunc("POST /api/cloud/sync/complete", s.cloudSyncComplete)
+		mux.HandleFunc("POST /api/cloud/sync/disconnect", s.cloudSyncDisconnect)
+		mux.HandleFunc("GET /api/cloud/sync/folders", s.cloudSyncFolders)
+		mux.HandleFunc("POST /api/cloud/sync/run", s.cloudSyncRun)
+		mux.HandleFunc("PUT /api/cloud/sync/providers/{provider}", s.cloudSyncSetCredentials)
+		mux.HandleFunc("DELETE /api/cloud/sync/providers/{provider}", s.cloudSyncClearCredentials)
+	}
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "no such endpoint")
 	})
@@ -62,8 +77,9 @@ func New(v *vault.Vault, m *mesh.Mesh) http.Handler {
 }
 
 type server struct {
-	v *vault.Vault
-	m *mesh.Mesh
+	v     *vault.Vault
+	m     *mesh.Mesh
+	cloud *cloud.Service
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {
@@ -78,11 +94,15 @@ func writeErr(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
-// handleErr maps domain errors to HTTP statuses.
+// handleErr maps domain errors to HTTP statuses. The two cloud statuses:
+// a ConfigError is a setup gap the caller can close (400), a ProviderError
+// is a failure that came from Dropbox rather than from us (502).
 func handleErr(w http.ResponseWriter, err error) {
 	var ve *vault.ValidationError
 	var nf *vault.NotFoundError
 	var ex *vault.ExistsError
+	var ce *cloud.ConfigError
+	var pe *cloud.ProviderError
 	switch {
 	case errors.As(err, &ve):
 		writeErr(w, http.StatusBadRequest, ve.Error())
@@ -90,6 +110,10 @@ func handleErr(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusNotFound, nf.Error())
 	case errors.As(err, &ex):
 		writeErr(w, http.StatusConflict, ex.Error())
+	case errors.As(err, &ce):
+		writeErr(w, http.StatusBadRequest, ce.Error())
+	case errors.As(err, &pe):
+		writeErr(w, http.StatusBadGateway, pe.Error())
 	default:
 		log.Printf("[thoughtmesh] internal error: %v", err)
 		writeErr(w, http.StatusInternalServerError, "internal error")

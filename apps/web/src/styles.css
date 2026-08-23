@@ -270,7 +270,7 @@ a {
   right: 0;
   bottom: 0;
   z-index: 25;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   align-items: stretch;
   height: calc(var(--tab-bar-height) + env(safe-area-inset-bottom));
   padding-bottom: env(safe-area-inset-bottom);
@@ -816,6 +816,185 @@ a {
 }
 .graph-page__hint {
   font-size: 0.85rem;
+}
+
+/* ------------------------------------------------------------------ *
+ * Cloud sync (the Sync page)
+ * ------------------------------------------------------------------ */
+.cloud,
+.cloud__connect {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+.cloud__providers {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.cloud__provider {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 0.85rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.cloud__provider-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.cloud__provider-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 0.9rem;
+}
+.cloud__provider-name {
+  font-weight: 600;
+  font-size: 1rem;
+}
+.cloud__provider-note {
+  margin: 0;
+  font-size: 0.85rem;
+}
+.cloud__provider-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+/* A panel that unfolds under a provider row (setup form, paste-a-code). */
+.cloud__panel {
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.cloud__setup-steps {
+  margin: 0;
+  padding-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+}
+.cloud__redirect {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.3rem;
+  flex-wrap: wrap;
+}
+.cloud__redirect code {
+  font-size: 0.78rem;
+  background: var(--code-bg);
+  border-radius: 0.35rem;
+  padding: 0.2rem 0.45rem;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+/* Connected state: account header + labelled rows. */
+.cloud__account {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 0.85rem 1rem;
+}
+.cloud__account-name {
+  display: block;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.cloud__account .muted {
+  font-size: 0.85rem;
+}
+.cloud__row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+}
+.cloud__label {
+  flex: none;
+  width: 5.5rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.cloud__value {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.cloud__select {
+  font: inherit;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: inherit;
+}
+.cloud__status p {
+  margin: 0.2rem 0;
+  font-size: 0.85rem;
+}
+.cloud__ok {
+  color: var(--primary);
+  font-size: 0.9rem;
+}
+.cloud__error {
+  color: var(--danger);
+  font-size: 0.9rem;
+}
+
+/* Folder picker */
+.cloud__picker {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 0.75rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.cloud__crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  font-size: 0.85rem;
+}
+.cloud__folders {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.cloud__folder {
+  width: 100%;
+  justify-content: flex-start;
+  gap: 0.5rem;
+}
+.cloud__folder-icon {
+  width: 1.1rem;
+  height: 1.1rem;
+  flex: none;
+  color: var(--muted);
 }
 
 /* ------------------------------------------------------------------ *

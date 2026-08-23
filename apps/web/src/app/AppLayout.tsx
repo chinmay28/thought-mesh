@@ -8,6 +8,7 @@ const NAV_ITEMS: { to: string; label: string; icon: ReactNode }[] = [
   { to: '/', label: 'Notes', icon: <NotesIcon /> },
   { to: '/graph', label: 'Graph', icon: <GraphIcon /> },
   { to: '/today', label: 'Today', icon: <TodayIcon /> },
+  { to: '/sync', label: 'Sync', icon: <SyncIcon /> },
 ];
 
 /** How long the developer badge stays on screen when the header mark is
@@ -186,6 +187,17 @@ function TodayIcon() {
       strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <rect x="3" y="5" width="18" height="16" rx="2" />
       <path d="M3 10h18M8 3v4M16 3v4" />
+    </svg>
+  );
+}
+
+function SyncIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M17.5 19a4.5 4.5 0 0 0 .9-8.9 6 6 0 0 0-11.7-.6A4 4 0 0 0 7 17.5" />
+      <path d="M12 12v8" />
+      <path d="m8.8 15.2 3.2-3.2 3.2 3.2" />
     </svg>
   );
 }

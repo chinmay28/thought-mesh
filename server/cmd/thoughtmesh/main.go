@@ -8,6 +8,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"errors"
 	"flag"
@@ -17,9 +18,12 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/chinmay28/thought-mesh/server/internal/api"
+	"github.com/chinmay28/thought-mesh/server/internal/cloud"
 	"github.com/chinmay28/thought-mesh/server/internal/mesh"
 	"github.com/chinmay28/thought-mesh/server/internal/vault"
 )
@@ -72,6 +76,14 @@ type config struct {
 	port    string
 	vault   string
 	webDist string
+	// Automatic cloud sync. Thought Mesh is self-hosted, so there is no
+	// shipped application identity to borrow: each deployment registers its
+	// own OAuth app with Dropbox and passes the credentials here. Leave the
+	// client id empty and the provider is simply offered as "needs setup" in
+	// the UI (it can also be entered there).
+	cloudSettings string
+	dropbox       cloud.Credentials
+	publicURL     string
 }
 
 func serve(args []string) error {
@@ -93,6 +105,18 @@ func serve(args []string) error {
 		"directory of markdown notes — the vault (env THOUGHTMESH_VAULT)")
 	fset.StringVar(&cfg.webDist, "web-dist", os.Getenv("WEB_DIST"),
 		"serve the PWA from this directory, overriding embedded assets (env WEB_DIST)")
+	fset.StringVar(&cfg.cloudSettings, "cloud-settings", os.Getenv("THOUGHTMESH_CLOUD_SETTINGS"),
+		"cloud sync settings file, holding the OAuth grant — kept OUTSIDE the vault "+
+			"(env THOUGHTMESH_CLOUD_SETTINGS; default: thoughtmesh-cloud.json beside the vault)")
+	fset.StringVar(&cfg.dropbox.ClientID, "dropbox-client-id",
+		os.Getenv("THOUGHTMESH_DROPBOX_CLIENT_ID"),
+		"Dropbox OAuth app key, enabling cloud sync to Dropbox (env THOUGHTMESH_DROPBOX_CLIENT_ID)")
+	fset.StringVar(&cfg.dropbox.ClientSecret, "dropbox-client-secret",
+		os.Getenv("THOUGHTMESH_DROPBOX_CLIENT_SECRET"),
+		"Dropbox OAuth app secret; omit for a PKCE-only app (env THOUGHTMESH_DROPBOX_CLIENT_SECRET)")
+	fset.StringVar(&cfg.publicURL, "public-url", os.Getenv("THOUGHTMESH_PUBLIC_URL"),
+		"origin this server is reached at, used to build the OAuth redirect URI "+
+			"(env THOUGHTMESH_PUBLIC_URL; default: the request's own origin)")
 	fset.BoolVar(&showVersion, "version", false, "print version and exit")
 
 	if err := fset.Parse(args); err != nil {
@@ -114,13 +138,53 @@ func run(cfg config) error {
 		return fmt.Errorf("open vault: %w", err)
 	}
 	m := mesh.New(v)
-	apiHandler := api.New(v, m)
+
+	// Cloud sync settings live OUTSIDE the vault, deliberately: the file
+	// holds OAuth tokens, and the vault is exactly what users copy, sync and
+	// version by other means — a token that rode along in it would leak with
+	// the first push. Default: beside the vault, not inside it.
+	settingsPath := cfg.cloudSettings
+	if settingsPath == "" {
+		settingsPath = filepath.Join(filepath.Dir(v.Root), "thoughtmesh-cloud.json")
+	}
+	cloudSvc := cloud.NewService(
+		cloud.NewStore(settingsPath),
+		cloud.NewRegistry(cfg.dropbox, nil, time.Now),
+		v.Zip, nil, cfg.publicURL)
+	// The scheduler is a background poller over the settings file, so it
+	// costs one small read a minute when nothing is configured — cheap enough
+	// to always run, and it means enabling a schedule from the UI takes
+	// effect without a restart.
+	scheduler := &cloud.Scheduler{Service: cloudSvc, Log: log.Default()}
+	scheduler.Start(context.Background())
+	logCloudProviders(cloudSvc)
+
+	apiHandler := api.New(v, m, cloudSvc)
 	handler := withWebClient(apiHandler, cfg.webDist)
 
 	addr := net.JoinHostPort(cfg.host, cfg.port)
 	log.Printf("[thoughtmesh] %s listening on http://%s:%s (vault: %s)",
 		api.AppVersion, cfg.host, cfg.port, v.Root)
 	return http.ListenAndServe(addr, handler)
+}
+
+// logCloudProviders says at startup which cloud destinations are usable. Not
+// having one isn't a misconfiguration to warn about — setup lives on the Sync
+// page now — so the line just says where to go.
+func logCloudProviders(svc *cloud.Service) {
+	var ready []string
+	for _, p := range svc.PublicProviders() {
+		if p.Configured == 1 {
+			ready = append(ready, p.Name)
+		}
+	}
+	if len(ready) == 0 {
+		log.Printf("[thoughtmesh] automatic cloud sync: no provider set up yet " +
+			"(Sync page in the app, or pass --dropbox-client-id)")
+		return
+	}
+	log.Printf("[thoughtmesh] automatic cloud sync available via %s; OAuth redirect URI is <origin>%s",
+		strings.Join(ready, ", "), cloud.CallbackPath)
 }
 
 // withWebClient serves the built PWA from the same origin as the API so the

@@ -110,7 +110,25 @@ Decisions worth keeping:
 - **Daily notes are a route** (`/today` → `journal/YYYY-MM-DD.md`), so the tab
   bar can carry them and they're linkable.
 
-## 6. Versioning, releases, deployment
+## 6. Cloud sync
+
+The vault's off-site copy, ported from CountRoster's automatic cloud backup:
+on a user-chosen schedule (hourly / daily / weekly / monthly, or on demand)
+the server zips the **whole vault** — notes, folder structure, and any
+non-hidden files riding along — and uploads `thoughtmesh-<stamp>.vault.zip`
+to a folder in the user's Dropbox. One-way by design: the files on the server
+stay the source of truth, and a snapshot in Dropbox is an ordinary zip of
+markdown, readable without Thought Mesh.
+
+The shape mirrors CountRoster deliberately (Provider / Service / Scheduler,
+PKCE OAuth with redirect *and* paste-a-code flows, per-deployment app
+registration from the UI, schedule deadlines persisted so a sleeping server
+runs an overdue sync on wake). The one adaptation: with no database, the
+settings and OAuth grant live in a small 0600 JSON file **outside the vault**
+(`thoughtmesh-cloud.json` beside it by default) — the vault is exactly the
+thing users sync by other means, and credentials must never travel with it.
+
+## 7. Versioning, releases, deployment
 
 All inherited from the sibling projects deliberately (the release/deploy
 machinery from CountRoster, the version scheme from sand-vault), so they all
@@ -131,10 +149,14 @@ operate identically:
   before every upgrade, health-checked, self-rolling-back. The vault lives
   outside the source tree so no code operation can touch it.
 
-## 7. Non-goals (for now)
+## 8. Non-goals (for now)
 
 - **Auth/multi-user** — trusted-network deployment, same stance as CountRoster.
 - **Attachments/images in the vault** — the renderer shows remote images;
-  serving vault-local attachments is future work in the server's static layer.
+  serving vault-local attachments is future work in the server's static layer
+  (cloud sync already includes them in the snapshot).
+- **Two-way cloud sync** — the Dropbox integration uploads snapshots; it never
+  writes into the vault. Bidirectional file sync belongs to tools built for it
+  (Syncthing, git), which the plain-folder vault already welcomes.
 - **Real-time collaborative editing** — 409-on-conflict is the intended model.
 - **Plugins/themes** — the mesh primitives (files, links, graph) come first.

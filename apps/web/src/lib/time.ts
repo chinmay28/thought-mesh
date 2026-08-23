@@ -16,6 +16,19 @@ export function relativeTime(mtimeMs: number, now = Date.now()): string {
   });
 }
 
+/** A stored ISO timestamp as local "Aug 23, 2:41 PM" style text. */
+export function formatDateTime(iso: string): string {
+  const t = new Date(iso);
+  if (Number.isNaN(t.getTime())) return iso;
+  return t.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    year: t.getFullYear() === new Date().getFullYear() ? undefined : 'numeric',
+  });
+}
+
 /** Local calendar date as YYYY-MM-DD — the daily note's name. */
 export function todayStamp(now = new Date()): string {
   const y = now.getFullYear();
