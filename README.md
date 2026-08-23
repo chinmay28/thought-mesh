@@ -17,13 +17,15 @@ app so every device shares one vault:
   app on a phone — no app store, no native build. Editing, autocomplete for
   `[[links]]`, search, and the graph all work one-handed.
 - **Daily notes.** The Today tab opens (or creates) `journal/YYYY-MM-DD.md`.
-- **Automatic Dropbox sync.** Point the server at a folder in your Dropbox and
-  it uploads a snapshot of the whole vault — notes, folder structure, all data
-  — hourly, daily, weekly or monthly, or on demand. Each upload is a plain
-  `.vault.zip` of markdown files, readable anywhere. Connect the account from
-  the Sync tab; the deployment registers its own OAuth app (no shipped
-  credentials), and the stored grant lives *outside* the vault so it can never
-  leak into a vault you sync by other means.
+- **Automatic Dropbox sync — and restore.** Point the server at a folder in
+  your Dropbox and it uploads a snapshot of the whole vault — notes, folder
+  structure, all data — hourly, daily, weekly or monthly, or on demand. Each
+  upload is a plain `.vault.zip` of markdown files, readable anywhere. And the
+  road back is one tap: pick any snapshot on the Sync tab and the server
+  restores the vault from it, saving a local backup of the current vault
+  first. The deployment registers its own OAuth app (no shipped credentials),
+  and the stored grant lives *outside* the vault so it can never leak into a
+  vault you sync by other means.
 - **One shared source of truth.** A small Go backend owns the vault; desktop
   and mobile clients all read and write the same notes, with conflict
   detection when two devices edit the same note.

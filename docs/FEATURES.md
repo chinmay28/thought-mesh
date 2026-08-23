@@ -118,7 +118,7 @@ Consequences, both ways:
 | End-to-end encrypted sync | ✅ with Obsidian Sync | n/a — data never leaves your network unless you enable Dropbox snapshots |
 | Version history | 💰 Sync history; File Recovery core plugin | ⚠️ no built-in history; quickstart snapshots the vault on every upgrade, and the vault is git-friendly |
 | Cloud backup | via sync services | ✅ built-in: scheduled zip of the whole vault to your Dropbox (hourly/daily/weekly/monthly or on demand), OAuth app registered per deployment, tokens stored outside the vault |
-| Restore path | reinstall + resync | unzip a snapshot into the vault folder — it's just files |
+| Restore from backup | reinstall + resync | ✅ one tap from the Sync tab: pick any snapshot in the folder and the server swaps it in — after saving a local backup of the current vault first (and a snapshot is just a zip, so unzipping by hand works too) |
 
 ## Openness, cost, privacy
 

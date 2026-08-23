@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"path"
@@ -12,12 +13,12 @@ import (
 	"time"
 )
 
-// Dropbox scopes: read metadata to browse folders, write content to upload
-// the vault snapshot, and read the account so the UI can name whose Dropbox
-// this is. `files.content.read` is deliberately absent — Thought Mesh never
-// reads a snapshot back out, and a token that can't download is a smaller
-// loss.
-const dropboxScopes = "account_info.read files.metadata.read files.content.write"
+// Dropbox scopes: read metadata to browse folders and list snapshots, write
+// content to upload the vault snapshot, read content to download one back
+// for a restore, and read the account so the UI can name whose Dropbox this
+// is. (`files.content.read` joined the set when restore did — an account
+// connected before that needs a reconnect before it can restore.)
+const dropboxScopes = "account_info.read files.metadata.read files.content.read files.content.write"
 
 // Dropbox is the Dropbox provider. The three base URLs are fields rather than
 // constants so tests can point them at an httptest server.
@@ -183,10 +184,28 @@ func (d *Dropbox) account(ctx context.Context, accessToken string) (Account, err
 	return Account{Label: label}, nil
 }
 
-// ListFolders walks one level of the Dropbox tree. Dropbox identifies a
-// folder by its path, and the root is the empty string — which is exactly
+// dropboxEntry is one row of a /2/files/list_folder response — a folder or a
+// file, distinguished by the ".tag".
+type dropboxEntry struct {
+	Tag            string `json:".tag"`
+	Name           string `json:"name"`
+	PathDisplay    string `json:"path_display"`
+	PathLower      string `json:"path_lower"`
+	Size           int64  `json:"size"`
+	ServerModified string `json:"server_modified"`
+}
+
+func (e dropboxEntry) path() string {
+	if e.PathDisplay != "" {
+		return e.PathDisplay
+	}
+	return e.PathLower
+}
+
+// listEntries fetches one level of the Dropbox tree. Dropbox identifies an
+// entry by its path, and the root is the empty string — which is exactly
 // what an empty folderID means here, so no translation is needed.
-func (d *Dropbox) ListFolders(ctx context.Context, accessToken, folderID string) ([]Folder, error) {
+func (d *Dropbox) listEntries(ctx context.Context, accessToken, folderID string) ([]dropboxEntry, error) {
 	payload, err := json.Marshal(map[string]any{
 		"path":      normalizeDropboxPath(folderID),
 		"recursive": false,
@@ -207,28 +226,48 @@ func (d *Dropbox) ListFolders(ctx context.Context, accessToken, folderID string)
 		return nil, err
 	}
 	var body struct {
-		Entries []struct {
-			Tag         string `json:".tag"`
-			Name        string `json:"name"`
-			PathDisplay string `json:"path_display"`
-			PathLower   string `json:"path_lower"`
-		} `json:"entries"`
+		Entries []dropboxEntry `json:"entries"`
 	}
 	if err := decodeJSON(res, "Dropbox folder listing", &body); err != nil {
 		return nil, err
 	}
+	return body.Entries, nil
+}
+
+// ListFolders lists the sub-folders of folderID, for the folder picker.
+func (d *Dropbox) ListFolders(ctx context.Context, accessToken, folderID string) ([]Folder, error) {
+	entries, err := d.listEntries(ctx, accessToken, folderID)
+	if err != nil {
+		return nil, err
+	}
 	folders := []Folder{}
-	for _, e := range body.Entries {
+	for _, e := range entries {
 		if e.Tag != "folder" {
 			continue
 		}
-		p := e.PathDisplay
-		if p == "" {
-			p = e.PathLower
-		}
-		folders = append(folders, Folder{ID: p, Name: e.Name, Path: p})
+		folders = append(folders, Folder{ID: e.path(), Name: e.Name, Path: e.path()})
 	}
 	return folders, nil
+}
+
+// ListFiles lists the files directly inside folderID, for the restore picker.
+func (d *Dropbox) ListFiles(ctx context.Context, accessToken, folderID string) ([]SnapshotFile, error) {
+	entries, err := d.listEntries(ctx, accessToken, folderID)
+	if err != nil {
+		return nil, err
+	}
+	files := []SnapshotFile{}
+	for _, e := range entries {
+		if e.Tag != "file" {
+			continue
+		}
+		f := SnapshotFile{ID: e.path(), Name: e.Name, Size: e.Size}
+		if t, err := time.Parse(time.RFC3339, e.ServerModified); err == nil {
+			f.ModifiedMs = t.UnixMilli()
+		}
+		files = append(files, f)
+	}
+	return files, nil
 }
 
 // Upload writes the snapshot into the chosen folder. `autorename` is on so
@@ -257,6 +296,42 @@ func (d *Dropbox) Upload(ctx context.Context, accessToken, folderID, name string
 		return err
 	}
 	return decodeJSON(res, "Dropbox upload", nil)
+}
+
+// maxDownload bounds what a restore will pull down — well past any plausible
+// vault of markdown, small enough that a mistaken selection (or a hostile
+// object at the path) can't exhaust the server's memory.
+const maxDownload = 1 << 30 // 1 GiB
+
+// Download reads one file back, for a restore.
+func (d *Dropbox) Download(ctx context.Context, accessToken, fileID string) ([]byte, error) {
+	arg, err := json.Marshal(map[string]any{"path": fileID})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		d.ContentBase+"/2/files/download", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Dropbox-API-Arg", string(arg))
+	res, err := d.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode > 299 {
+		return nil, apiError("Dropbox download", res)
+	}
+	data, err := io.ReadAll(io.LimitReader(res.Body, maxDownload+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxDownload {
+		return nil, fmt.Errorf("Dropbox download larger than %d bytes — refusing to restore it", maxDownload)
+	}
+	return data, nil
 }
 
 func (d *Dropbox) postForm(ctx context.Context, endpoint string, form url.Values, what string, out any) error {

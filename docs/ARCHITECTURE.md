@@ -128,6 +128,8 @@ statuses 200/201/204/400/404/409 (+502 for cloud). The contract is pinned by
 | `GET /api/cloud/sync/callback` | OAuth redirect landing (→ `/sync?cloud=…`) |
 | `GET /api/cloud/sync/folders` | folder picker listing |
 | `POST /api/cloud/sync/run` | zip + upload right now |
+| `GET /api/cloud/sync/snapshots` | `.vault.zip` snapshots in the folder, newest first |
+| `POST /api/cloud/sync/restore` | download a snapshot and replace the vault (local backup first) |
 | `PUT/DELETE /api/cloud/sync/providers/{id}` | per-deployment OAuth app setup |
 
 Concurrency is optimistic and file-native: a save may carry `base_mtime_ms`,
@@ -177,9 +179,26 @@ Decisions worth keeping:
 The vault's off-site copy, ported from CountRoster's automatic cloud backup:
 on a user-chosen schedule (hourly / daily / weekly / monthly, or on demand)
 the server zips the **whole vault** and uploads
-`thoughtmesh-<stamp>.vault.zip` to a folder in the user's Dropbox. One-way by
-design: the files on the server stay the source of truth, and a snapshot in
-Dropbox is an ordinary zip of markdown, readable without Thought Mesh.
+`thoughtmesh-<stamp>.vault.zip` to a folder in the user's Dropbox. Upload is
+one-way — the files on the server stay the source of truth, and a snapshot in
+Dropbox is an ordinary zip of markdown, readable without Thought Mesh — but
+the trip back exists too: **restore** lists the `.vault.zip` snapshots in the
+chosen folder and replaces the vault with a selected one.
+
+Restore is engineered to be regret-proof, in this order:
+
+1. Download and structurally validate the archive (`vault.RestoreZip` rejects
+   traversal and absolute paths, hidden segments, backslashes, oversized or
+   over-populated archives — a hostile zip leaves the vault untouched).
+2. Write a **local pre-restore backup** of the vault as it stands, beside the
+   settings file (never inside the vault): the undo button.
+3. Unpack to a temporary directory first, then swap: clear the vault's
+   non-hidden entries and move the staged tree in. Hidden entries (`.git`,
+   `.obsidian`) survive, exactly as they're excluded from snapshots.
+
+A restore is a true replace, not a merge — notes created after the snapshot
+disappear (they're in the pre-restore backup), which is the only semantics
+that doesn't resurrect deleted notes.
 
 Three layers, and only one of them knows a third party exists:
 

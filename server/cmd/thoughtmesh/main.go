@@ -150,7 +150,7 @@ func run(cfg config) error {
 	cloudSvc := cloud.NewService(
 		cloud.NewStore(settingsPath),
 		cloud.NewRegistry(cfg.dropbox, nil, time.Now),
-		v.Zip, nil, cfg.publicURL)
+		v.Zip, v.RestoreZip, nil, cfg.publicURL)
 	// The scheduler is a background poller over the settings file, so it
 	// costs one small read a minute when nothing is configured — cheap enough
 	// to always run, and it means enabling a schedule from the UI takes

@@ -67,6 +67,8 @@ func New(v *vault.Vault, m *mesh.Mesh, cl *cloud.Service) http.Handler {
 		mux.HandleFunc("POST /api/cloud/sync/disconnect", s.cloudSyncDisconnect)
 		mux.HandleFunc("GET /api/cloud/sync/folders", s.cloudSyncFolders)
 		mux.HandleFunc("POST /api/cloud/sync/run", s.cloudSyncRun)
+		mux.HandleFunc("GET /api/cloud/sync/snapshots", s.cloudSyncSnapshots)
+		mux.HandleFunc("POST /api/cloud/sync/restore", s.cloudSyncRestore)
 		mux.HandleFunc("PUT /api/cloud/sync/providers/{provider}", s.cloudSyncSetCredentials)
 		mux.HandleFunc("DELETE /api/cloud/sync/providers/{provider}", s.cloudSyncClearCredentials)
 	}

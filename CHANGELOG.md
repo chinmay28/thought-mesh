@@ -12,6 +12,14 @@ pushed tag as that release's body — keep the format:
 
 ## Unreleased
 
+- Restore from cloud: the Sync tab lists the `.vault.zip` snapshots in the
+  connected Dropbox folder and restores the vault from any of them. The
+  server validates the archive (zip-slip and size guards), writes a local
+  pre-restore backup beside the settings file, and stages to a temp
+  directory before swapping — so a failed restore leaves the vault
+  untouched and a successful one is undoable. The Dropbox scope now
+  includes `files.content.read`; accounts connected before this need a
+  reconnect before restoring.
 - Automatic cloud sync to Dropbox, ported from CountRoster's cloud backup:
   the server zips the whole vault and uploads it to a chosen Dropbox folder
   on a schedule (hourly/daily/weekly/monthly) or on demand from the new Sync

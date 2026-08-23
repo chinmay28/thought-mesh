@@ -997,6 +997,51 @@ a {
   color: var(--muted);
 }
 
+/* Restore */
+.cloud__restore {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  align-items: flex-start;
+  border-top: 1px solid var(--border);
+  padding-top: 0.85rem;
+}
+.cloud__restore .cloud__picker {
+  align-self: stretch;
+}
+.cloud__snapshots {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.cloud__snapshot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.45rem 0;
+}
+.cloud__snapshot + .cloud__snapshot {
+  border-top: 1px solid var(--border);
+}
+.cloud__snapshot-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 0.8rem;
+}
+.cloud__snapshot-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+.cloud__restore-note {
+  margin: 0;
+  font-size: 0.8rem;
+}
+
 /* ------------------------------------------------------------------ *
  * Narrow screens: app-shell layout, tab bar + FAB take over navigation
  * ------------------------------------------------------------------ */

@@ -105,6 +105,57 @@ func TestDropboxRefreshKeepsRefreshToken(t *testing.T) {
 	}
 }
 
+func TestDropboxListFilesAndDownload(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"entries": []map[string]any{
+				{".tag": "file", "name": "thoughtmesh-a.vault.zip", "path_display": "/Notes/thoughtmesh-a.vault.zip",
+					"size": 1234, "server_modified": "2026-08-20T10:00:00Z"},
+				{".tag": "folder", "name": "sub", "path_display": "/Notes/sub"},
+			},
+		})
+	}))
+	defer api.Close()
+	var downloadArg string
+	content := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		downloadArg = r.Header.Get("Dropbox-API-Arg")
+		w.Write([]byte("zip-bytes"))
+	}))
+	defer content.Close()
+
+	d := NewDropbox(Credentials{ClientID: "app-key"}, api.Client(), fixedNow)
+	d.APIBase = api.URL
+	d.ContentBase = content.URL
+
+	files, err := d.ListFiles(context.Background(), "token", "/Notes")
+	if err != nil {
+		t.Fatalf("ListFiles: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("files = %+v", files)
+	}
+	f := files[0]
+	if f.ID != "/Notes/thoughtmesh-a.vault.zip" || f.Size != 1234 ||
+		f.ModifiedMs != time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC).UnixMilli() {
+		t.Errorf("file = %+v", f)
+	}
+
+	data, err := d.Download(context.Background(), "token", f.ID)
+	if err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	if string(data) != "zip-bytes" {
+		t.Errorf("data = %q", data)
+	}
+	var arg struct {
+		Path string `json:"path"`
+	}
+	json.Unmarshal([]byte(downloadArg), &arg)
+	if arg.Path != f.ID {
+		t.Errorf("download arg = %s", downloadArg)
+	}
+}
+
 func TestDropboxListFoldersAndUpload(t *testing.T) {
 	var uploadArg string
 	var uploadBody string

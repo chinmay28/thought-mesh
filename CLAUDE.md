@@ -125,12 +125,21 @@ theirs / keep mine".
 
 `server/internal/cloud` zips the whole vault (`vault.Zip` — every non-hidden
 file, structure preserved) and uploads it to a Dropbox folder on a schedule
-(`off|hourly|daily|weekly|monthly`), configured from the Sync page. Ported
-from CountRoster's cloud backup with the same three layers, and only one of
-them knows a third party exists: `Provider` (OAuth + browse + upload),
-`Service` (settings, token refresh, when the next run is due), `Scheduler`
-(a goroutine polling once a minute). Provider base URLs are struct fields so
-tests point them at `httptest` servers.
+(`off|hourly|daily|weekly|monthly`), configured from the Sync page — and
+restores from any `.vault.zip` snapshot in that folder. Ported from
+CountRoster's cloud backup with the same three layers, and only one of them
+knows a third party exists: `Provider` (OAuth + browse + upload/download),
+`Service` (settings, token refresh, when the next run is due, restore),
+`Scheduler` (a goroutine polling once a minute). Provider base URLs are
+struct fields so tests point them at `httptest` servers.
+
+**Restore order is load-bearing** (`Service.Restore`): download + validate
+first, then write a local pre-restore backup of the vault beside the settings
+file, then `vault.RestoreZip` — which itself rejects hostile archives
+(traversal/absolute/hidden paths, size caps) and stages to a temp directory
+before swapping, so any failure leaves the vault untouched. A restore is a
+replace, not a merge; hidden entries (`.git`, `.obsidian`) survive. Don't
+reorder these steps or turn restore into a merge.
 
 Rules to preserve (mostly inherited from CountRoster):
 

@@ -188,6 +188,36 @@ export function runCloudSync(): Promise<CloudRunResult> {
   return request('POST', '/sync/run', {});
 }
 
+/** One vault snapshot sitting in the connected folder — a restore candidate. */
+export interface CloudSnapshot {
+  id: string; // the provider's handle; what restore takes
+  name: string;
+  size: number;
+  modified_ms: number;
+}
+
+/** List the `.vault.zip` snapshots in the connected folder, newest first. */
+export async function listCloudSnapshots(): Promise<CloudSnapshot[]> {
+  const body = await request<{ snapshots: CloudSnapshot[] }>('GET', '/sync/snapshots');
+  return body.snapshots;
+}
+
+export interface CloudRestoreResult {
+  snapshot: string;
+  files: number;
+  /** Local pre-restore backup of the vault as it was — the undo path. */
+  backup_file: string;
+}
+
+/**
+ * Replace the vault with a snapshot's contents. The server writes a local
+ * backup of the current vault first, and validates/stages the archive before
+ * touching anything, so a failed restore leaves the vault as it was.
+ */
+export function restoreCloudSnapshot(id: string): Promise<CloudRestoreResult> {
+  return request('POST', '/sync/restore', { id });
+}
+
 /**
  * Store the OAuth client for a provider — the client id (and secret, where
  * the provider needs one) from an app the user registered themselves.

@@ -2,6 +2,8 @@ package cloud
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +25,10 @@ type fakeProvider struct {
 	failNext  error // returned by the next Upload
 	token     Token
 	account   Account
+	// Restore fixtures.
+	files        []SnapshotFile
+	downloadData []byte
+	downloaded   []string
 }
 
 type fakeUpload struct {
@@ -65,6 +71,15 @@ func (f *fakeProvider) ListFolders(_ context.Context, _, _ string) ([]Folder, er
 	return []Folder{{ID: "/Notes", Name: "Notes", Path: "/Notes"}}, nil
 }
 
+func (f *fakeProvider) ListFiles(_ context.Context, _, folderID string) ([]SnapshotFile, error) {
+	return f.files, nil
+}
+
+func (f *fakeProvider) Download(_ context.Context, _, fileID string) ([]byte, error) {
+	f.downloaded = append(f.downloaded, fileID)
+	return f.downloadData, nil
+}
+
 func (f *fakeProvider) Upload(_ context.Context, _, folderID, name string, data []byte) error {
 	if f.failNext != nil {
 		err := f.failNext
@@ -76,17 +91,28 @@ func (f *fakeProvider) Upload(_ context.Context, _, folderID, name string, data 
 }
 
 // newTestService wires a service around the fake provider with a pinned,
-// advanceable clock.
+// advanceable clock. The stub archive/unpack pair stands in for vault.Zip /
+// vault.RestoreZip; unpacked bytes land in svcUnpacked for assertions.
 func newTestService(t *testing.T, f *fakeProvider) (*Service, *time.Time) {
+	svc, now, _ := newTestServiceUnpack(t, f)
+	return svc, now
+}
+
+func newTestServiceUnpack(t *testing.T, f *fakeProvider) (*Service, *time.Time, *[][]byte) {
 	t.Helper()
 	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+	unpacked := &[][]byte{}
 	svc := NewService(
 		newStore(t),
 		Registry{f},
 		func() ([]byte, error) { return []byte("vault-zip"), nil },
+		func(data []byte) (int, error) {
+			*unpacked = append(*unpacked, data)
+			return 3, nil
+		},
 		func() time.Time { return now },
 		"")
-	return svc, &now
+	return svc, &now, unpacked
 }
 
 // connect walks the paste flow to a connected account.
@@ -272,6 +298,83 @@ func TestRedirectSupported(t *testing.T) {
 	svc.PublicURL = "https://pinned.example.com"
 	if !svc.RedirectSupported("http://192.168.1.10:8788") {
 		t.Error("a pinned https public URL should enable redirects")
+	}
+}
+
+func TestSnapshotsFilteredAndSortedNewestFirst(t *testing.T) {
+	f := stdFake()
+	f.files = []SnapshotFile{
+		{ID: "/Notes/old.vault.zip", Name: "old.vault.zip", ModifiedMs: 100},
+		{ID: "/Notes/readme.txt", Name: "readme.txt", ModifiedMs: 999},
+		{ID: "/Notes/new.vault.zip", Name: "new.vault.zip", ModifiedMs: 200},
+	}
+	svc, _ := newTestService(t, f)
+	connect(t, svc)
+	svc.Update(nil, ptr("/Notes"), ptr("/Notes"))
+
+	snaps, err := svc.Snapshots(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshots: %v", err)
+	}
+	if len(snaps) != 2 || snaps[0].Name != "new.vault.zip" || snaps[1].Name != "old.vault.zip" {
+		t.Errorf("snapshots = %+v", snaps)
+	}
+}
+
+func TestSnapshotsNeedFolder(t *testing.T) {
+	svc, _ := newTestService(t, stdFake())
+	connect(t, svc)
+	if _, err := svc.Snapshots(context.Background()); !IsConfigError(err) {
+		t.Errorf("snapshots without folder = %v; want ConfigError", err)
+	}
+}
+
+func TestRestoreDownloadsBacksUpAndUnpacks(t *testing.T) {
+	f := stdFake()
+	f.downloadData = []byte("snapshot-bytes")
+	svc, _, unpacked := newTestServiceUnpack(t, f)
+	connect(t, svc)
+	svc.Update(nil, ptr("/Notes"), ptr("/Notes"))
+
+	result, err := svc.Restore(context.Background(), "/Notes/thoughtmesh-2026-08-01-1200.vault.zip")
+	if err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if result.Snapshot != "thoughtmesh-2026-08-01-1200.vault.zip" || result.Files != 3 {
+		t.Errorf("result = %+v", result)
+	}
+	if len(f.downloaded) != 1 || f.downloaded[0] != "/Notes/thoughtmesh-2026-08-01-1200.vault.zip" {
+		t.Errorf("downloaded = %v", f.downloaded)
+	}
+	if len(*unpacked) != 1 || string((*unpacked)[0]) != "snapshot-bytes" {
+		t.Errorf("unpacked = %v", *unpacked)
+	}
+	// The pre-restore backup exists beside the settings file, outside the
+	// vault, and holds the archive of the vault as it was.
+	data, err := os.ReadFile(result.BackupFile)
+	if err != nil {
+		t.Fatalf("backup file: %v", err)
+	}
+	if string(data) != "vault-zip" {
+		t.Errorf("backup = %q", data)
+	}
+	if filepath.Dir(result.BackupFile) != filepath.Dir(svc.Store.Path) {
+		t.Errorf("backup at %s; want beside %s", result.BackupFile, svc.Store.Path)
+	}
+	if !strings.HasPrefix(filepath.Base(result.BackupFile), "thoughtmesh-pre-restore-") {
+		t.Errorf("backup name = %s", result.BackupFile)
+	}
+}
+
+func TestRestoreRefusesNonSnapshots(t *testing.T) {
+	svc, _ := newTestService(t, stdFake())
+	connect(t, svc)
+	if _, err := svc.Restore(context.Background(), "/Notes/evil.exe"); !IsConfigError(err) {
+		t.Errorf("restoring a non-snapshot = %v; want ConfigError", err)
+	}
+	svc2, _ := newTestService(t, stdFake())
+	if _, err := svc2.Restore(context.Background(), "/Notes/x.vault.zip"); !IsConfigError(err) {
+		t.Errorf("restore unconnected = %v; want ConfigError", err)
 	}
 }
 

@@ -55,6 +55,16 @@ type Account struct {
 	Label string
 }
 
+// SnapshotFile is one file in the connected folder — a restore candidate.
+// ID is the provider's native handle (a Dropbox path); ModifiedMs is the
+// provider's server-side modification time.
+type SnapshotFile struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Size       int64  `json:"size"`
+	ModifiedMs int64  `json:"modified_ms"`
+}
+
 // Provider is one cloud destination. Implementations are stateless apart
 // from their configured client credentials, so one instance serves every
 // request.
@@ -100,8 +110,13 @@ type Provider interface {
 	// ListFolders lists the sub-folders of folderID (empty = the account
 	// root), for the folder picker.
 	ListFolders(ctx context.Context, accessToken, folderID string) ([]Folder, error)
+	// ListFiles lists the files directly inside folderID, for the restore
+	// picker. The service filters to vault snapshots; the provider doesn't.
+	ListFiles(ctx context.Context, accessToken, folderID string) ([]SnapshotFile, error)
 	// Upload writes data as a new file called name inside folderID.
 	Upload(ctx context.Context, accessToken, folderID, name string, data []byte) error
+	// Download reads one file back, by the ID ListFiles reported.
+	Download(ctx context.Context, accessToken, fileID string) ([]byte, error)
 }
 
 // Credentials are the OAuth client the operator registered with a provider.
