@@ -1,6 +1,6 @@
 # Thought Mesh
 
-Interconnected note taking — a self-hosted replacement for
+Interconnected note taking — a self-hosted alternative to
 [Obsidian](https://obsidian.md)-style linked notes, built as a **client-server**
 app so every device shares one vault:
 
@@ -30,16 +30,24 @@ app so every device shares one vault:
 - **No accounts, no auth.** Meant to run on a trusted network (your LAN, a
   Tailscale tailnet, a VPN). Anyone who can reach the server can use it.
 
+**How does it compare to Obsidian?** See the honest, feature-by-feature
+comparison in [`docs/FEATURES.md`](./docs/FEATURES.md) — including what
+Obsidian does better today.
+
 ## Layout
 
 ```
 thought-mesh/
-├── DESIGN.md                 # architecture & design document
+├── docs/
+│   ├── ARCHITECTURE.md       # design & architecture — the reasoning document
+│   └── FEATURES.md           # detailed comparison with Obsidian
 ├── server/                   # the Go backend — REST API over the vault, compiles to ONE static binary
 │   ├── cmd/thoughtmesh/      #   entrypoint; embeds the built PWA at release time
-│   └── internal/             #   vault (file store), mesh (link index), HTTP layer
-└── apps/
-    └── web/                  # @thoughtmesh/web — installable PWA client (Vite + React)
+│   └── internal/             #   vault (file store), mesh (link index), cloud (Dropbox sync), HTTP layer
+├── apps/
+│   └── web/                  # @thoughtmesh/web — installable PWA client (Vite + React)
+├── scripts/                  # version.mjs (the one version assembler), quickstart.sh (installer)
+└── deploy/                   # reference systemd unit
 ```
 
 The deployable artifact is a **single static Go binary** (`server/bin/thoughtmesh`)
@@ -88,11 +96,21 @@ npm run build        # web bundle + `go build` → server/bin/thoughtmesh
 npm run typecheck    # tsc --noEmit + `go vet`
 ```
 
+## Documentation
+
+| Document | What it covers |
+| --- | --- |
+| [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | The design: why the files are the data, how the link mesh is derived, the API contract, cloud sync, trust model |
+| [`docs/FEATURES.md`](./docs/FEATURES.md) | Feature-by-feature comparison with Obsidian, and the gaps that matter |
+| [`server/README.md`](./server/README.md) | Backend package map and Go workflows |
+| [`apps/web/README.md`](./apps/web/README.md) | Web client structure and workflows |
+| [`CLAUDE.md`](./CLAUDE.md) | Working conventions for changing this codebase |
+
 ## Versioning
 
-`vYEAR.MONTH.<commit count>` — a calendar version where every commit is a
-patch release: `v2026.8.311` is the 311th commit on the 2026.8 line. The year
-and month are source constants in
+Calendar-based: `vYEAR.MONTH.<commit count>` — every commit is a patch
+release, so `v2026.8.311` is the 311th commit on the 2026.8 line. Year and
+month are source constants in
 [`server/internal/version/version.go`](./server/internal/version/version.go),
 bumped by hand when a release line opens (never taken from the build clock);
 the patch number is the git commit count, stamped into the binary and the web

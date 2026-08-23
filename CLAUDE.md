@@ -18,8 +18,15 @@ writes the same notes.
 
 There is **no auth** by design: the server runs on a trusted network
 (LAN/Tailscale/VPN). This repo deliberately mirrors the conventions of its
-sibling project CountRoster (versioning, quickstart, release workflow, UI
-chrome) — when in doubt, match what CountRoster does.
+sibling projects — CountRoster (quickstart, release workflow, UI chrome,
+cloud sync) and sand-vault (calendar versioning) — when in doubt, match what
+they do.
+
+See `docs/ARCHITECTURE.md` for the full design rationale and
+`docs/FEATURES.md` for the product comparison with Obsidian. **Keep both in
+step with behavior changes**: a new endpoint belongs in ARCHITECTURE.md's API
+table, and a feature added or removed belongs in FEATURES.md's tables (its
+"known gaps" list is the closest thing to a roadmap).
 
 ## Commands
 
@@ -220,3 +227,13 @@ are the contract between the two.
   offered over a network must make its source available. Keep that note in
   `README.md`.
 - Commit with a DCO sign-off (`git commit -s`).
+
+## Documentation map
+
+- `README.md` — the front door: features, getting started, install, docs index.
+- `docs/ARCHITECTURE.md` — design & architecture (the "why"); its API table
+  mirrors the routes in `server/internal/api`.
+- `docs/FEATURES.md` — the Obsidian comparison; update it when features land
+  or claims stop being true.
+- `server/README.md` / `apps/web/README.md` — per-tree package maps.
+- `CHANGELOG.md` — `## <tag>` sections feed release bodies verbatim.
