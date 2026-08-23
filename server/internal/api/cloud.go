@@ -259,6 +259,43 @@ func (s *server) cloudSyncRun(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// cloudSyncSnapshots lists the vault snapshots in the connected folder,
+// newest first, for the restore picker.
+func (s *server) cloudSyncSnapshots(w http.ResponseWriter, r *http.Request) {
+	snapshots, err := s.cloud.Snapshots(r.Context())
+	if err != nil {
+		handleErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"snapshots": snapshots})
+}
+
+// cloudSyncRestore downloads one snapshot and replaces the vault with its
+// contents. The server writes a local pre-restore backup of the vault first;
+// the response says where, so the UI can tell the user their undo path.
+func (s *server) cloudSyncRestore(w http.ResponseWriter, r *http.Request) {
+	body, err := decodeLoose(r)
+	if err != nil {
+		handleErr(w, err)
+		return
+	}
+	id, _ := body["id"].(string)
+	if strings.TrimSpace(id) == "" {
+		writeErr(w, http.StatusBadRequest, "Pick a snapshot to restore.")
+		return
+	}
+	result, err := s.cloud.Restore(r.Context(), id)
+	if err != nil {
+		handleErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"snapshot":    result.Snapshot,
+		"files":       result.Files,
+		"backup_file": result.BackupFile,
+	})
+}
+
 // requestOrigin reconstructs the origin the browser used, which is what the
 // OAuth redirect URI has to be built from. Forwarded headers win: behind a
 // TLS-terminating proxy the request itself looks like plain HTTP on an

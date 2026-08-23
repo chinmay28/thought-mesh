@@ -6,6 +6,8 @@ import {
   disconnectCloudSync,
   fetchCloudSync,
   listCloudFolders,
+  listCloudSnapshots,
+  restoreCloudSnapshot,
   runCloudSync,
   setProviderCredentials,
   startCloudConnect,
@@ -13,6 +15,7 @@ import {
   type CloudConnectStart,
   type CloudFolder,
   type CloudProviderInfo,
+  type CloudSnapshot,
   type CloudSyncFrequency,
   type CloudSyncState,
 } from '../api/cloud.ts';
@@ -45,6 +48,7 @@ export function SyncPage() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
+  const [restoring, setRestoring] = useState(false);
   const [setupFor, setSetupFor] = useState<string | null>(null);
   // A paste-mode authorization in progress: the user is off at the provider,
   // and we're waiting for the code they'll bring back. The provider id rides
@@ -177,6 +181,29 @@ export function SyncPage() {
       const result = await runCloudSync();
       setState((prev) => (prev ? { ...prev, settings: result.settings } : prev));
       setMessage(`Uploaded ${result.file_name}.`);
+    });
+  }
+
+  function restoreSnapshot(snap: CloudSnapshot) {
+    // The one destructive action on this page, so the confirm spells out
+    // both what happens and the undo path.
+    if (
+      !window.confirm(
+        `Restore "${snap.name}"?\n\nThis replaces every note in the vault with ` +
+          `the snapshot's contents. A local backup of the vault as it is right ` +
+          `now is saved on the server first, so this can be undone.`,
+      )
+    ) {
+      return;
+    }
+    return run(`restore:${snap.id}`, async () => {
+      const result = await restoreCloudSnapshot(snap.id);
+      setRestoring(false);
+      setMessage(
+        `Restored ${result.files} file${result.files === 1 ? '' : 's'} from ` +
+          `${result.snapshot}. The previous vault was saved on the server as ` +
+          `${result.backup_file}.`,
+      );
     });
   }
 
@@ -426,6 +453,27 @@ export function SyncPage() {
           </div>
 
           <CloudStatus settings={settings} />
+
+          {/* Restore lives below the upload controls: it's the rarer, heavier
+              action, and the snapshot list costs a provider round trip — so
+              it only loads when asked for. */}
+          <div className="cloud__restore">
+            <button
+              type="button"
+              className="btn"
+              disabled={busy !== null || settings.folder_id === null}
+              onClick={() => setRestoring((open) => !open)}
+            >
+              {restoring ? 'Hide snapshots' : 'Restore from a snapshot…'}
+            </button>
+            {restoring && (
+              <RestorePanel
+                busy={busy}
+                onRestore={(snap) => void restoreSnapshot(snap)}
+                onError={setError}
+              />
+            )}
+          </div>
         </div>
       )}
 
@@ -661,6 +709,95 @@ function CloudStatus({ settings }: { settings: CloudSyncState['settings'] }) {
       {settings.frequency !== 'off' && settings.next_run_at && (
         <p className="muted">Next sync {formatDateTime(settings.next_run_at)}.</p>
       )}
+    </div>
+  );
+}
+
+/** A file size the way people read them. */
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * The snapshots in the connected folder, newest first, each one tap (plus a
+ * spelled-out confirm) from becoming the vault again.
+ */
+function RestorePanel({
+  busy,
+  onRestore,
+  onError,
+}: {
+  busy: string | null;
+  onRestore: (snap: CloudSnapshot) => void;
+  onError: (message: string) => void;
+}) {
+  const [snapshots, setSnapshots] = useState<CloudSnapshot[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    listCloudSnapshots().then(
+      (next) => {
+        if (!cancelled) setSnapshots(next);
+      },
+      (err: unknown) => {
+        if (cancelled) return;
+        onError(err instanceof Error ? err.message : String(err));
+        setSnapshots([]);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+    // One fetch per open — the panel unmounts when hidden.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (snapshots === null) {
+    return (
+      <div className="cloud__picker">
+        <p className="muted">Looking for snapshots…</p>
+      </div>
+    );
+  }
+  if (snapshots.length === 0) {
+    return (
+      <div className="cloud__picker">
+        <p className="muted">
+          No snapshots in the chosen folder yet — “Sync now” creates the first
+          one.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className="cloud__picker">
+      <ul className="cloud__snapshots">
+        {snapshots.map((snap) => (
+          <li key={snap.id} className="cloud__snapshot">
+            <div className="cloud__snapshot-meta">
+              <span className="cloud__snapshot-name">{snap.name}</span>
+              <span className="muted">
+                {formatSize(snap.size)}
+                {snap.modified_ms > 0 && <> · {formatDateTime(new Date(snap.modified_ms).toISOString())}</>}
+              </span>
+            </div>
+            <button
+              type="button"
+              className="btn btn--small"
+              disabled={busy !== null}
+              onClick={() => onRestore(snap)}
+            >
+              {busy === `restore:${snap.id}` ? 'Restoring…' : 'Restore'}
+            </button>
+          </li>
+        ))}
+      </ul>
+      <p className="muted cloud__restore-note">
+        Restoring replaces the vault with the snapshot; the server keeps a
+        local backup of the current vault first.
+      </p>
     </div>
   );
 }

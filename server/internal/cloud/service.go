@@ -4,6 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -47,6 +51,9 @@ type Service struct {
 	// Archive produces the bytes to upload — a zip of the whole vault
 	// (vault.Zip in practice; a test hands in a stub).
 	Archive func() ([]byte, error)
+	// Unpack replaces the vault's contents from a snapshot's bytes and
+	// reports how many files it wrote (vault.RestoreZip in practice).
+	Unpack func([]byte) (int, error)
 	// Clock is the time source for schedules and token expiry; nil means
 	// time.Now. Injected so tests can pin the instant.
 	Clock func() time.Time
@@ -60,11 +67,12 @@ type Service struct {
 }
 
 // NewService wires a service and its in-flight-authorization store.
-func NewService(store *Store, reg Registry, archive func() ([]byte, error),
+func NewService(store *Store, reg Registry,
+	archive func() ([]byte, error), unpack func([]byte) (int, error),
 	clock func() time.Time, publicURL string) *Service {
 	s := &Service{
-		Store: store, Registry: reg, Archive: archive, Clock: clock,
-		PublicURL: strings.TrimRight(publicURL, "/"),
+		Store: store, Registry: reg, Archive: archive, Unpack: unpack,
+		Clock: clock, PublicURL: strings.TrimRight(publicURL, "/"),
 	}
 	s.pending = newPendingStore(s.Now)
 	return s
@@ -627,6 +635,114 @@ func (s *Service) RunIfDue(ctx context.Context) (bool, error) {
 func (s *Service) fileName() string {
 	stamp := s.Now().Format("2006-01-02-1504")
 	return "thoughtmesh-" + stamp + ".vault.zip"
+}
+
+// snapshotSuffix is what marks a file in the folder as one of ours. Restore
+// only ever offers and accepts these — the folder may hold anything.
+const snapshotSuffix = ".vault.zip"
+
+// Snapshots lists the vault snapshots in the connected folder, newest first.
+func (s *Service) Snapshots(ctx context.Context) ([]SnapshotFile, error) {
+	set, err := s.Settings()
+	if err != nil {
+		return nil, err
+	}
+	if !set.Connected() {
+		return nil, &ConfigError{Message: "No cloud account is connected."}
+	}
+	if set.FolderID == nil {
+		return nil, &ConfigError{Message: "Choose a folder in the connected account first."}
+	}
+	provider, token, err := s.authorize(ctx)
+	if err != nil {
+		return nil, err
+	}
+	files, err := provider.ListFiles(ctx, token, *set.FolderID)
+	if err != nil {
+		return nil, &ProviderError{Provider: provider.Name(), Err: err}
+	}
+	snapshots := []SnapshotFile{}
+	for _, f := range files {
+		if strings.HasSuffix(f.Name, snapshotSuffix) {
+			snapshots = append(snapshots, f)
+		}
+	}
+	sort.Slice(snapshots, func(i, j int) bool {
+		if snapshots[i].ModifiedMs != snapshots[j].ModifiedMs {
+			return snapshots[i].ModifiedMs > snapshots[j].ModifiedMs
+		}
+		// The stamp in the name breaks ties (and carries the order when a
+		// provider reports no modification time).
+		return snapshots[i].Name > snapshots[j].Name
+	})
+	return snapshots, nil
+}
+
+// RestoreResult reports one completed restore.
+type RestoreResult struct {
+	Snapshot string
+	Files    int
+	// BackupFile is the local pre-restore snapshot of the vault as it was,
+	// written before anything changed — the undo button.
+	BackupFile string
+}
+
+// Restore downloads one snapshot and replaces the vault with its contents.
+//
+// The order is deliberate: download and validate first, then write a LOCAL
+// snapshot of the current vault (beside the settings file, never inside the
+// vault), and only then unpack — which itself stages to a temp directory
+// before touching anything. A failure at any step leaves the vault as it
+// was; a success that turns out to be regretted has the pre-restore backup.
+func (s *Service) Restore(ctx context.Context, fileID string) (*RestoreResult, error) {
+	if !strings.HasSuffix(fileID, snapshotSuffix) {
+		return nil, &ConfigError{Message: "Only " + snapshotSuffix + " snapshots can be restored."}
+	}
+	set, err := s.Settings()
+	if err != nil {
+		return nil, err
+	}
+	if !set.Connected() {
+		return nil, &ConfigError{Message: "No cloud account is connected."}
+	}
+	provider, token, err := s.authorize(ctx)
+	if err != nil {
+		return nil, err
+	}
+	data, err := provider.Download(ctx, token, fileID)
+	if err != nil {
+		return nil, &ProviderError{Provider: provider.Name(), Err: err}
+	}
+
+	backupPath, err := s.writePreRestoreBackup()
+	if err != nil {
+		return nil, fmt.Errorf("pre-restore backup: %w", err)
+	}
+	files, err := s.Unpack(data)
+	if err != nil {
+		return nil, err
+	}
+	return &RestoreResult{
+		Snapshot:   path.Base(fileID),
+		Files:      files,
+		BackupFile: backupPath,
+	}, nil
+}
+
+// writePreRestoreBackup zips the vault as it stands into the settings file's
+// directory (outside the vault, so it can't recurse into later snapshots).
+func (s *Service) writePreRestoreBackup() (string, error) {
+	data, err := s.Archive()
+	if err != nil {
+		return "", err
+	}
+	stamp := s.Now().Format("2006-01-02-150405")
+	backupPath := filepath.Join(filepath.Dir(s.Store.Path),
+		"thoughtmesh-pre-restore-"+stamp+snapshotSuffix)
+	if err := os.WriteFile(backupPath, data, 0o644); err != nil {
+		return "", err
+	}
+	return backupPath, nil
 }
 
 // IsConfigError reports whether err is a user-fixable configuration problem.

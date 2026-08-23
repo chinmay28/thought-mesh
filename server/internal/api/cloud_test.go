@@ -13,7 +13,10 @@ import (
 )
 
 // stubProvider implements cloud.Provider for route-level tests.
-type stubProvider struct{ creds cloud.Credentials }
+type stubProvider struct {
+	creds cloud.Credentials
+	tmp   string // scratch dir for Download's fixture snapshot
+}
 
 func (p *stubProvider) ID() string              { return "dropbox" }
 func (p *stubProvider) Name() string            { return "Dropbox" }
@@ -46,9 +49,29 @@ func (p *stubProvider) ListFolders(context.Context, string, string) ([]cloud.Fol
 	return []cloud.Folder{{ID: "/Notes", Name: "Notes", Path: "/Notes"}}, nil
 }
 
+func (p *stubProvider) ListFiles(context.Context, string, string) ([]cloud.SnapshotFile, error) {
+	return []cloud.SnapshotFile{
+		{ID: "/Notes/thoughtmesh-a.vault.zip", Name: "thoughtmesh-a.vault.zip", Size: 42, ModifiedMs: 1000},
+		{ID: "/Notes/notes.txt", Name: "notes.txt", Size: 1, ModifiedMs: 2000},
+	}, nil
+}
+
 func (p *stubProvider) Upload(context.Context, string, string, string, []byte) error { return nil }
 
-func newCloudServer(t *testing.T) http.Handler {
+func (p *stubProvider) Download(context.Context, string, string) ([]byte, error) {
+	// A real one-note snapshot, so the restore path exercises vault.RestoreZip.
+	v, err := vault.Open(p.tmp)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := v.Write("Restored.md", "# back from the cloud"); err != nil {
+		return nil, err
+	}
+	return v.Zip()
+}
+
+// tmp gives Download somewhere to build its fixture snapshot.
+func newCloudServer(t *testing.T) (http.Handler, *vault.Vault) {
 	t.Helper()
 	v, err := vault.Open(t.TempDir())
 	if err != nil {
@@ -56,11 +79,11 @@ func newCloudServer(t *testing.T) http.Handler {
 	}
 	svc := cloud.NewService(
 		cloud.NewStore(filepath.Join(t.TempDir(), "cloud.json")),
-		cloud.Registry{&stubProvider{creds: cloud.Credentials{ClientID: "app"}}},
-		v.Zip,
+		cloud.Registry{&stubProvider{creds: cloud.Credentials{ClientID: "app"}, tmp: t.TempDir()}},
+		v.Zip, v.RestoreZip,
 		func() time.Time { return time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC) },
 		"")
-	return New(v, mesh.New(v), svc)
+	return New(v, mesh.New(v), svc), v
 }
 
 func TestCloudRoutesAbsentWithoutService(t *testing.T) {
@@ -72,7 +95,7 @@ func TestCloudRoutesAbsentWithoutService(t *testing.T) {
 }
 
 func TestCloudSettingsShape(t *testing.T) {
-	h := newCloudServer(t)
+	h, _ := newCloudServer(t)
 	rec := do(t, h, "GET", "/api/cloud/sync", "")
 	if rec.Code != 200 {
 		t.Fatalf("settings = %d: %s", rec.Code, rec.Body.String())
@@ -103,7 +126,7 @@ func TestCloudSettingsShape(t *testing.T) {
 }
 
 func TestCloudConnectCompleteScheduleRun(t *testing.T) {
-	h := newCloudServer(t)
+	h, _ := newCloudServer(t)
 
 	// Paste-mode connect returns the authorize URL and a pending handle.
 	rec := do(t, h, "POST", "/api/cloud/sync/connect", `{"provider":"dropbox","mode":"paste"}`)
@@ -169,7 +192,7 @@ func TestCloudConnectCompleteScheduleRun(t *testing.T) {
 }
 
 func TestCloudCredentialRoutes(t *testing.T) {
-	h := newCloudServer(t)
+	h, _ := newCloudServer(t)
 
 	rec := do(t, h, "PUT", "/api/cloud/sync/providers/dropbox", `{"client_id":"has space"}`)
 	if rec.Code != 400 {
@@ -195,8 +218,57 @@ func TestCloudCredentialRoutes(t *testing.T) {
 	}
 }
 
+func TestCloudSnapshotsAndRestore(t *testing.T) {
+	h, v := newCloudServer(t)
+	// Connect (paste flow) and choose a folder.
+	start := decode(t, do(t, h, "POST", "/api/cloud/sync/connect", `{"provider":"dropbox","mode":"paste"}`))
+	do(t, h, "POST", "/api/cloud/sync/complete",
+		`{"pending_id":"`+start["pending_id"].(string)+`","code":"c"}`)
+	do(t, h, "PATCH", "/api/cloud/sync", `{"folder_id":"/Notes","folder_path":"/Notes"}`)
+
+	// The vault holds a note the restore should replace.
+	if _, err := v.Write("Doomed.md", "will be replaced"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Snapshot listing filters to .vault.zip.
+	rec := do(t, h, "GET", "/api/cloud/sync/snapshots", "")
+	if rec.Code != 200 {
+		t.Fatalf("snapshots = %d: %s", rec.Code, rec.Body.String())
+	}
+	snaps := decode(t, rec)["snapshots"].([]any)
+	if len(snaps) != 1 {
+		t.Fatalf("snapshots = %v", snaps)
+	}
+	s := snaps[0].(map[string]any)
+	if s["name"] != "thoughtmesh-a.vault.zip" || s["id"] == "" || s["size"] != float64(42) {
+		t.Errorf("snapshot = %v", s)
+	}
+
+	// Restore without an id is a 400; with one, the vault is replaced.
+	rec = do(t, h, "POST", "/api/cloud/sync/restore", `{}`)
+	if rec.Code != 400 {
+		t.Errorf("restore without id = %d", rec.Code)
+	}
+	rec = do(t, h, "POST", "/api/cloud/sync/restore", `{"id":"/Notes/thoughtmesh-a.vault.zip"}`)
+	if rec.Code != 200 {
+		t.Fatalf("restore = %d: %s", rec.Code, rec.Body.String())
+	}
+	body := decode(t, rec)
+	if body["snapshot"] != "thoughtmesh-a.vault.zip" || body["files"] != float64(1) ||
+		body["backup_file"] == "" {
+		t.Errorf("restore body = %v", body)
+	}
+	if content, _, err := v.Read("Restored.md"); err != nil || content != "# back from the cloud" {
+		t.Errorf("restored note = %q, %v", content, err)
+	}
+	if _, _, err := v.Read("Doomed.md"); !vault.IsNotFound(err) {
+		t.Errorf("pre-restore note survived: %v", err)
+	}
+}
+
 func TestCloudCallbackRedirects(t *testing.T) {
-	h := newCloudServer(t)
+	h, _ := newCloudServer(t)
 	rec := do(t, h, "GET", cloud.CallbackPath+"?error=access_denied", "")
 	if rec.Code != 302 {
 		t.Fatalf("callback = %d", rec.Code)
