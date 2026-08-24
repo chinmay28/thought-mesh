@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { QuickCapture } from '../components/QuickCapture.tsx';
 import {
   listNotes,
   search,
@@ -10,12 +11,27 @@ import { relativeTime } from '../lib/time.ts';
 
 const SEARCH_DEBOUNCE_MS = 250;
 
-/** Home: search across the vault, or browse everything, newest first. */
+/**
+ * Home: write a note, then search across the vault or browse it, newest
+ * first. The composer leads because capture is what the app gets opened for
+ * — reaching it should never cost a tap.
+ */
 export function NotesPage() {
   const [notes, setNotes] = useState<NoteInfo[] | null>(null);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[] | null>(null);
+  const composeRef = useRef<HTMLTextAreaElement>(null);
+  const [params, setParams] = useSearchParams();
+
+  // "?new=1" is how the "+" action asks for the composer from anywhere else.
+  // It is consumed on arrival so a reload doesn't grab focus all over again.
+  useEffect(() => {
+    if (!params.has('new')) return;
+    composeRef.current?.focus();
+    composeRef.current?.scrollIntoView({ block: 'start' });
+    setParams({}, { replace: true });
+  }, [params, setParams]);
 
   useEffect(() => {
     let alive = true;
@@ -49,6 +65,11 @@ export function NotesPage() {
 
   return (
     <div className="page">
+      <QuickCapture
+        textRef={composeRef}
+        onCreated={(note) => setNotes((prev) => [note, ...(prev ?? [])])}
+      />
+
       <div className="searchbar">
         <SearchIcon />
         <input
@@ -94,13 +115,10 @@ export function NotesPage() {
         <div className="empty">
           <p className="empty__lead">Your mesh is empty.</p>
           <p className="muted">
-            Notes are plain markdown files. Link them with{' '}
-            <code>[[double brackets]]</code> and Thought Mesh keeps track of
-            what connects to what.
+            Write the first note above. Notes are plain markdown files — link
+            them with <code>[[double brackets]]</code> and Thought Mesh keeps
+            track of what connects to what.
           </p>
-          <Link to="/new" className="btn btn--primary">
-            Write your first note
-          </Link>
         </div>
       ) : (
         <section aria-label="All notes">

@@ -74,6 +74,7 @@ Consequences, both ways:
 | Tables | ✅ incl. editor | ❌ rendered as text |
 | Callouts, footnotes, math (LaTeX), Mermaid | ✅ | ❌ |
 | Formatting toolbar (mobile) | ✅ | ✅ bold/italic/code/heading/list/task/quote/wikilink |
+| Quick capture | ⚠️ new-note command, then a name | ✅ the home page opens on a composer — type, Save, keep typing; the first line names the file |
 | Autosave | ✅ | ✅ ~1s debounce, with saved/saving status |
 | Edit conflict safety | sync-dependent (conflict copies) | ✅ mtime check → 409 → explicit "load theirs / keep mine" |
 | Undo history | ✅ editor + file recovery snapshots | ⚠️ browser textarea undo within a session; history = your backups/git |
