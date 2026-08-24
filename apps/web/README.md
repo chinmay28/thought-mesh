@@ -17,5 +17,9 @@ Notable corners:
   injection possible; wikilinks are router links). Keep it dependency-free.
 - `src/components/Editor.tsx` — textarea editor with formatting toolbar and
   `[[` autocomplete chips.
+- `src/components/QuickCapture.tsx` + `src/lib/noteName.ts` — the composer the
+  home page opens on. No name field: the first line of the body becomes the
+  file stem, and a taken name walks " 2", " 3" … rather than stopping to ask.
+  `/new` is still there for a note that wants a name or a folder of its own.
 - `src/pages/GraphPage.tsx` — deterministic force layout rendered as SVG.
 - The service worker never caches `/api` (see `vite.config.ts`).

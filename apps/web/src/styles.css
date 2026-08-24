@@ -417,6 +417,68 @@ a {
 }
 
 /* ------------------------------------------------------------------ *
+ * Quick capture — the composer the home page opens on
+ *
+ * Deliberately the first thing on the page and never more than one control:
+ * a box and a button. The note's name comes out of its first line
+ * (lib/noteName.ts), so there is nothing to fill in before writing.
+ * ------------------------------------------------------------------ */
+.quick-note {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  /* The page stacks on margins, and search reads as a separate job — give the
+     composer room so the two don't look like one control. */
+  margin-bottom: 1.5rem;
+}
+.quick-note__text {
+  font: inherit;
+  line-height: 1.6;
+  width: 100%;
+  /* Auto-grown from JS, as in the editor: the page scrolls, not the box. */
+  resize: none;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  padding: 0.8rem 0.9rem;
+  outline: none;
+  box-shadow: var(--shadow);
+}
+.quick-note__text:focus {
+  border-color: var(--primary);
+}
+.quick-note__row {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+/* The hint carries the derived name, which can be as long as a sentence —
+   it gets the leftover width and an ellipsis rather than wrapping the row. */
+.quick-note__hint {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Both hint links (the saved note, and the way to the full form) sit in a
+   line of muted text; the color is enough to read them as links. */
+.quick-note__hint a {
+  color: var(--primary);
+  text-decoration: none;
+}
+.quick-note__hint a:hover {
+  text-decoration: underline;
+}
+.quick-note__saved {
+  font-weight: 600;
+}
+
+/* ------------------------------------------------------------------ *
  * Search + note lists
  * ------------------------------------------------------------------ */
 .searchbar {
@@ -1078,6 +1140,17 @@ a {
   }
   .editor__toolbar {
     top: 3.4rem;
+  }
+  /* 16px inputs stop iOS Safari from zooming in on focus. The zoom sticks
+     after the field is left, and the layout then runs off the right edge —
+     so every control that takes a caret is held at 16px, not just the ones
+     that would otherwise fall under it today. */
+  .editor__text,
+  .quick-note__text,
+  .field__input,
+  .searchbar__input,
+  .cloud__select {
+    font-size: 16px;
   }
 }
 

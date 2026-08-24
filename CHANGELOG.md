@@ -12,6 +12,17 @@ pushed tag as that release's body — keep the format:
 
 ## Unreleased
 
+- The home page opens on a composer: type a note and save it, without a form
+  or a name field in the way. The first line becomes the file name (markdown
+  stripped, links reduced to the words they show); a name already in the
+  vault picks up a " 2", " 3" … suffix rather than failing, and an
+  unnameable note falls back to a timestamp. "New note" and the "+" button
+  now put the caret in that box; `/new` remains for a note that wants a name
+  or folder of its own, linked from under the composer.
+- Phone keyboards no longer zoom the page in: the note editor's textarea was
+  under 16px, which makes iOS Safari scale the viewport on focus and leave it
+  there, so the layout ran off the right edge afterwards. Every control that
+  takes a caret is pinned to 16px on narrow screens, as in CountRoster.
 - Notched phones: the header no longer sits under the status bar when the
   PWA is installed. The shell asked for `viewport-fit=cover` but never inset
   itself, so the clock and battery painted over the brand lockup. Adopted

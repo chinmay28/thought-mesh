@@ -23,6 +23,9 @@ export function AppLayout() {
   const { pathname } = useLocation();
   // The FAB *is* the "new note" action, so don't show it on that form.
   const showFab = pathname !== '/new';
+  // Writing happens in the composer at the top of the home page, so "+" is a
+  // trip there rather than to a form — "?new=1" is what puts the caret in it.
+  const composeTo = '/?new=1';
   // Tapping the developer mark throws the badge up full screen for a beat.
   const [devFlash, setDevFlash] = useState(false);
 
@@ -70,7 +73,7 @@ export function AppLayout() {
                 {item.label}
               </NavLink>
             ))}
-            <Link to="/new" className="btn btn--primary">
+            <Link to={composeTo} className="btn btn--primary">
               New note
             </Link>
           </nav>
@@ -108,7 +111,7 @@ export function AppLayout() {
 
       {/* Floating action button — the primary create action on phones. */}
       {showFab && (
-        <Link to="/new" className="fab" aria-label="New note" title="New note">
+        <Link to={composeTo} className="fab" aria-label="New note" title="New note">
           <PlusIcon />
         </Link>
       )}
