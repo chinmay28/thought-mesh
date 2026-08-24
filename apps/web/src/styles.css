@@ -242,7 +242,16 @@ a {
 .fab {
   position: fixed;
   right: max(1rem, env(safe-area-inset-right));
-  bottom: calc(var(--tab-bar-height) + env(safe-area-inset-bottom) + 0.9rem);
+  /* Rides down with the tab bar so it keeps its 0.9rem of clearance above it
+     — see --viewport-gap below. The floor is for a gap wide enough that the
+     subtraction would otherwise walk the button off the screen. */
+  bottom: max(
+    0.9rem,
+    calc(
+      var(--tab-bar-height) + env(safe-area-inset-bottom) + 0.9rem -
+        var(--viewport-gap, 0px)
+    )
+  );
   z-index: 30;
   width: 3.5rem;
   height: 3.5rem;
@@ -268,7 +277,12 @@ a {
   position: fixed;
   left: 0;
   right: 0;
-  bottom: 0;
+  /* Not "bottom: 0": with viewport-fit=cover the page paints to the edge of
+     the screen, but iOS pins fixed elements to a layout viewport that can end
+     short of it — the bar then floats above a strip of page background.
+     --viewport-gap (lib/viewportGap.ts) measures that strip, and is 0
+     wherever the two edges are the same. */
+  bottom: calc(-1 * var(--viewport-gap, 0px));
   z-index: 25;
   grid-template-columns: repeat(4, 1fr);
   align-items: stretch;
@@ -277,6 +291,22 @@ a {
   background: color-mix(in srgb, var(--surface) 94%, transparent);
   backdrop-filter: saturate(1.4) blur(12px);
   border-top: 1px solid var(--border);
+}
+/* Belt and braces for the same strip: if a browser hides the gap from
+   `visualViewport` too, whatever is left below the bar still gets the bar's
+   own ground instead of page background. It hangs off the bottom edge, so on
+   every device where the bar really is flush this paints off-canvas and costs
+   nothing. The colour is the bar's translucent ground already composited over
+   the page, since a backdrop-filter doesn't reach outside its own box. */
+.tab-bar::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: 100vh;
+  background: color-mix(in srgb, var(--surface) 94%, var(--bg));
+  pointer-events: none;
 }
 .tab-bar__item {
   display: flex;

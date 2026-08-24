@@ -22,4 +22,7 @@ Notable corners:
   file stem, and a taken name walks " 2", " 3" … rather than stopping to ask.
   `/new` is still there for a note that wants a name or a folder of its own.
 - `src/pages/GraphPage.tsx` — deterministic force layout rendered as SVG.
+- `src/lib/viewportGap.ts` — publishes `--viewport-gap`, the strip iOS paints
+  below where `position: fixed` lands; the tab bar and FAB read it so they sit
+  on the screen's edge rather than the layout viewport's.
 - The service worker never caches `/api` (see `vite.config.ts`).

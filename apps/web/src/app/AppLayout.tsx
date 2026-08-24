@@ -1,6 +1,7 @@
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import { isConnected, subscribeConnected } from '../api/client.ts';
+import { trackViewportGap } from '../lib/viewportGap.ts';
 import { APP_VERSION } from '../version.ts';
 
 /** Primary destinations, shown in the desktop header and the mobile tab bar. */
@@ -28,6 +29,10 @@ export function AppLayout() {
   const composeTo = '/?new=1';
   // Tapping the developer mark throws the badge up full screen for a beat.
   const [devFlash, setDevFlash] = useState(false);
+
+  // Keeps --viewport-gap current, so the fixed bottom layer can sit on the
+  // screen's edge and not the layout viewport's. No-op where they're one.
+  useEffect(trackViewportGap, []);
 
   useEffect(() => {
     if (!devFlash) return;
