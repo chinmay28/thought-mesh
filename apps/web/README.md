@@ -4,7 +4,7 @@ The Thought Mesh web client: a mobile-friendly, installable PWA (Vite + React)
 over the server's REST API.
 
 ```bash
-npm run dev        # http://localhost:5173, proxies /api → http://localhost:8788
+npm run dev        # http://localhost:5173, proxies /api → http://localhost:8881
 npm test           # vitest (jsdom, globals off)
 npm run build      # tsc --noEmit && vite build → dist/
 ```

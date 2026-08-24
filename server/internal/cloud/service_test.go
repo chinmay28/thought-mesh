@@ -118,7 +118,7 @@ func newTestServiceUnpack(t *testing.T, f *fakeProvider) (*Service, *time.Time, 
 // connect walks the paste flow to a connected account.
 func connect(t *testing.T, svc *Service) {
 	t.Helper()
-	start, err := svc.StartConnect("fake", "http://192.168.1.10:8788", true)
+	start, err := svc.StartConnect("fake", "http://192.168.1.10:8881", true)
 	if err != nil {
 		t.Fatalf("StartConnect: %v", err)
 	}
@@ -285,9 +285,9 @@ func TestRedirectSupported(t *testing.T) {
 	svc, _ := newTestService(t, stdFake())
 	cases := map[string]bool{
 		"https://mesh.example.com": true,
-		"http://localhost:8788":    true,
-		"http://127.0.0.1:8788":    true,
-		"http://192.168.1.10:8788": false,
+		"http://localhost:8881":    true,
+		"http://127.0.0.1:8881":    true,
+		"http://192.168.1.10:8881": false,
 		"http://mesh.local":        false,
 	}
 	for origin, want := range cases {
@@ -296,7 +296,7 @@ func TestRedirectSupported(t *testing.T) {
 		}
 	}
 	svc.PublicURL = "https://pinned.example.com"
-	if !svc.RedirectSupported("http://192.168.1.10:8788") {
+	if !svc.RedirectSupported("http://192.168.1.10:8881") {
 		t.Error("a pinned https public URL should enable redirects")
 	}
 }

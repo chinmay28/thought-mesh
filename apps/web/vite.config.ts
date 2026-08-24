@@ -14,7 +14,7 @@ const allowedHosts = ['.ts.net'];
 // Where the backend API lives during development. The web dev server proxies
 // `/api` here so the browser talks to one origin (no CORS), matching the
 // production single-origin deployment.
-const API_TARGET = process.env.VITE_API_TARGET ?? 'http://localhost:8788';
+const API_TARGET = process.env.VITE_API_TARGET ?? 'http://localhost:8881';
 
 export default defineConfig({
   // Stamp the version into the bundle — the browser has no git to ask.

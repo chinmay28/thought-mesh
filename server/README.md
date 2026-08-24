@@ -4,7 +4,7 @@ The Go backend: a REST API over a **vault** — an ordinary folder of markdown
 files — plus the built PWA, served from one origin as a single static binary.
 
 ```bash
-go run ./cmd/thoughtmesh                 # serve on :8788, vault at ./data/vault
+go run ./cmd/thoughtmesh                 # serve on :8881, vault at ./data/vault
 go run ./cmd/thoughtmesh serve --vault ~/notes --port 9000
 go test ./...
 ```

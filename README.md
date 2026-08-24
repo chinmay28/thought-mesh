@@ -62,7 +62,7 @@ dependencies — Node is only needed at build time to compile the web client.
 npm install                                   # Node >= 20.10 (build/dev tooling)
 
 # Terminal 1 — the backend API (Go >= 1.23; newer toolchains fetch automatically):
-cd server && go run ./cmd/thoughtmesh          # http://localhost:8788
+cd server && go run ./cmd/thoughtmesh          # http://localhost:8881
 
 # Terminal 2 — the web client with hot reload:
 npm run dev --workspace @thoughtmesh/web       # http://localhost:5173, proxies /api

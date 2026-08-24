@@ -50,7 +50,7 @@ go build ./...       # compile check
 Run the app in development (two processes):
 
 ```bash
-(cd server && go run ./cmd/thoughtmesh serve)   # API on http://localhost:8788 (flags: --vault/--port/--host)
+(cd server && go run ./cmd/thoughtmesh serve)   # API on http://localhost:8881 (flags: --vault/--port/--host)
 npm run dev --workspace @thoughtmesh/web        # PWA on http://localhost:5173, proxies /api → server
 ```
 

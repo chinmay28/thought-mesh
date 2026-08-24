@@ -100,7 +100,7 @@ func serve(args []string) error {
 	var cfg config
 	var showVersion bool
 	fset.StringVar(&cfg.host, "host", envOr("HOST", "0.0.0.0"), "bind address (env HOST)")
-	fset.StringVar(&cfg.port, "port", envOr("PORT", "8788"), "listen port (env PORT)")
+	fset.StringVar(&cfg.port, "port", envOr("PORT", "8881"), "listen port (env PORT)")
 	fset.StringVar(&cfg.vault, "vault", envOr("THOUGHTMESH_VAULT", "./data/vault"),
 		"directory of markdown notes — the vault (env THOUGHTMESH_VAULT)")
 	fset.StringVar(&cfg.webDist, "web-dist", os.Getenv("WEB_DIST"),
