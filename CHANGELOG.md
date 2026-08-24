@@ -12,6 +12,16 @@ pushed tag as that release's body — keep the format:
 
 ## Unreleased
 
+- The bottom tab bar reaches the bottom of the screen on iPhone. With
+  `viewport-fit=cover` the page paints to the edge of the display, but iOS
+  pins `position: fixed` to a layout viewport that ends short of it — on an
+  installed web app the whole fixed layer came to rest 62px up, with page
+  background showing beneath the bar. The shell now measures that strip
+  (`visualViewport` against the layout viewport, published as
+  `--viewport-gap`) and drops the bar and the floating button onto the real
+  edge; the bar also paints its own ground below itself, so a browser that
+  hides the strip from both still shows no seam. Both are no-ops wherever the
+  two edges already agree.
 - The home page opens on a composer: type a note and save it, without a form
   or a name field in the way. The first line becomes the file name (markdown
   stripped, links reduced to the words they show); a name already in the
