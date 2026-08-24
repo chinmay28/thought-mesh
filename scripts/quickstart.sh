@@ -51,7 +51,7 @@
 #   THOUGHTMESH_USER      service system user     (default: thoughtmesh)
 #   THOUGHTMESH_PREFIX    install prefix          (default: /opt/thoughtmesh; source → $PREFIX/src)
 #   THOUGHTMESH_DATA_DIR  vault + backups dir     (default: /var/lib/thoughtmesh)
-#   PORT                  port to listen on       (default: 8788)
+#   PORT                  port to listen on       (default: 8881)
 #   HOST                  bind address            (default: 0.0.0.0)
 #   INSTALL_NODE          auto | never            install Node 22 if missing/old (default: auto; source mode, build-time only)
 #   INSTALL_GO            auto | never            install Go if missing/old (default: auto; source mode, build-time only)
@@ -96,7 +96,7 @@ RELEASE_TAG="${THOUGHTMESH_RELEASE:-latest}"
 SVC_USER="${THOUGHTMESH_USER:-thoughtmesh}"
 PREFIX="${THOUGHTMESH_PREFIX:-/opt/thoughtmesh}"
 DATA_DIR="${THOUGHTMESH_DATA_DIR:-/var/lib/thoughtmesh}"
-PORT="${PORT:-8788}"
+PORT="${PORT:-8881}"
 HOST="${HOST:-0.0.0.0}"
 INSTALL_NODE="${INSTALL_NODE:-auto}"
 INSTALL_GO="${INSTALL_GO:-auto}"
