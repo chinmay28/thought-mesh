@@ -12,6 +12,13 @@ pushed tag as that release's body — keep the format:
 
 ## Unreleased
 
+- Notched phones: the header no longer sits under the status bar when the
+  PWA is installed. The shell asked for `viewport-fit=cover` but never inset
+  itself, so the clock and battery painted over the brand lockup. Adopted
+  CountRoster's safe-area block — the header pads by
+  `env(safe-area-inset-top)`, the shell by the left/right insets, the footer
+  by the bottom one, and the editor toolbar's sticky offset follows the
+  header's new height.
 - Restore from cloud: the Sync tab lists the `.vault.zip` snapshots in the
   connected Dropbox folder and restores the vault from any of them. The
   server validates the archive (zip-slip and size guards), writes a local

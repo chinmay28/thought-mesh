@@ -1080,3 +1080,39 @@ a {
     top: 3.4rem;
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * Notched devices: keep the shell out from under the system UI
+ *
+ * index.html asks for `viewport-fit=cover` and iOS's translucent status bar,
+ * so the page paints edge to edge — behind the clock, the notch and the home
+ * indicator. Everything the user must be able to read or tap therefore has to
+ * inset itself. Same block as CountRoster's, and it comes last in the file so
+ * it also wins over the narrow-screen overrides above.
+ * ------------------------------------------------------------------ */
+@supports (padding: max(0px)) {
+  .app {
+    padding-left: max(1rem, env(safe-area-inset-left));
+    padding-right: max(1rem, env(safe-area-inset-right));
+  }
+  /* Without this the brand lockup sits under the status bar. The header is
+     sticky at top:0, so its own padding is what holds the clock off it — and
+     its translucent background keeps covering the strip while notes scroll. */
+  .app__header {
+    padding-top: max(0.85rem, env(safe-area-inset-top));
+  }
+  .app__footer {
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  }
+  /* The editor toolbar sticks directly below the header, so its offset is the
+     header's fixed part (its 0.85rem bottom padding + the brand lockup) plus
+     whatever the top padding above actually resolved to. */
+  .editor__toolbar {
+    top: calc(2.75rem + max(0.85rem, env(safe-area-inset-top)));
+  }
+  @media (max-width: 720px) {
+    .editor__toolbar {
+      top: calc(2.55rem + max(0.85rem, env(safe-area-inset-top)));
+    }
+  }
+}
