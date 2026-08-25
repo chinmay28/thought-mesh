@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/chinmay28/thought-mesh/server/internal/history"
 )
 
 // CallbackPath is where a provider sends the browser back after consent. It
@@ -50,6 +52,10 @@ type Service struct {
 	State *StateStore
 	// Vault is the local half — the folder being synced.
 	Vault LocalStore
+	// History is the vault's git history, when the machine has one. A nil
+	// *Repo is a working, disabled history: every method is a safe no-op, so
+	// nothing below has to check whether git happened to be installed.
+	History *history.Repo
 	// Clock is the time source for schedules and token expiry; nil means
 	// time.Now. Injected so tests can pin the instant.
 	Clock func() time.Time
@@ -63,10 +69,10 @@ type Service struct {
 }
 
 // NewService wires a service and its in-flight-authorization store.
-func NewService(store *Store, state *StateStore, local LocalStore, reg Registry,
-	clock func() time.Time, publicURL string) *Service {
+func NewService(store *Store, state *StateStore, local LocalStore, hist *history.Repo,
+	reg Registry, clock func() time.Time, publicURL string) *Service {
 	s := &Service{
-		Store: store, State: state, Vault: local, Registry: reg,
+		Store: store, State: state, Vault: local, History: hist, Registry: reg,
 		Clock: clock, PublicURL: strings.TrimRight(publicURL, "/"),
 	}
 	s.pending = newPendingStore(s.Now)
@@ -604,7 +610,7 @@ func (s *Service) RunIfDue(ctx context.Context) (bool, error) {
 	if !set.due(s.Now()) {
 		return false, nil
 	}
-	if _, err := s.Sync(ctx); err != nil {
+	if _, err := s.Sync(ctx, ""); err != nil {
 		return true, err
 	}
 	return true, nil

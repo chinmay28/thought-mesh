@@ -151,11 +151,17 @@ statuses 200/201/204/400/404/409 (+502 for cloud). The contract is pinned by
 | `POST /api/categories/rename` | rename a category vault-wide (onto an existing one merges) |
 | `POST /api/categories/delete` | strip a category from every note carrying it |
 | `POST /api/merge` | three-way merge of `base`/`mine`/`theirs` → merged text + conflict count |
+| `GET /api/history` | the vault's versions, newest first (`available: 0` where there is none) |
+| `GET /api/history/notes/{path}` | the versions that touched one note |
+| `GET /api/history/version/{path}?ref=` | a note's content as of one version |
+| `POST /api/history/restore` | put one note back to a version (the rest of the vault untouched) |
+| `POST /api/history/checkpoint` | mark this moment, with an optional message |
+| `POST /api/history/rollback` | put the whole vault back to a version, as a new version |
 | `GET/PATCH /api/cloud/sync` | cloud sync settings (tokens redacted) |
 | `POST /api/cloud/sync/connect · /complete · /disconnect` | OAuth lifecycle |
 | `GET /api/cloud/sync/callback` | OAuth redirect landing (→ `/sync?cloud=…`) |
 | `GET /api/cloud/sync/folders` | folder picker listing |
-| `POST /api/cloud/sync/run` | sync now: push, pull, propagate deletions |
+| `POST /api/cloud/sync/run` | sync now: push, pull, propagate deletions (optional `message`) |
 | `GET /api/cloud/sync/conflicts` | paths both sides changed, awaiting a decision |
 | `GET /api/cloud/sync/conflicts/{path}` | both versions, the base, and a merge of them |
 | `POST /api/cloud/sync/resolve` | settle one conflict (`keep_local` / `keep_remote` / `merge`) |
@@ -326,7 +332,75 @@ Rules that must hold:
   treating the old hashes as a base there would read as "every note was deleted
   remotely" and push that deletion.
 
-## 7. Versioning, releases, deployment
+## 7. Version history (`internal/history`)
+
+The vault is kept as an ordinary **git repository**, in the vault folder
+itself. Git rather than a scheme of our own for the same reason the notes are
+plain markdown: the folder stays something other tools understand. Whatever
+Thought Mesh records, `git log`, `git diff` and `git checkout` read — and
+someone who stops using this app keeps every version of every note.
+
+It **shells out to the `git` binary** rather than linking a git
+implementation. That keeps the single static build (no cgo, no large dependency
+tree) and guarantees the repository is exactly what the git on the machine
+considers valid rather than approximately so. Where git is missing the feature
+is simply off: `Available()` reports it, every call is a no-op, and the API
+answers `available: 0` rather than 404 so a client can tell "no history here"
+from "a server too old to have it". `--history=off` disables it outright.
+
+**The repository is local to this server.** `.git` is a hidden entry, which
+every vault walk and the cloud sync tree listing already skip, so it never
+rides along to Dropbox — syncing a `.git` directory through a file-sync service
+is a well-known way to corrupt one, and with one server owning the vault there
+is nothing to gain. Point a second server at the same Dropbox folder and it
+keeps its own history of what it sees.
+
+**History is append-only.** Rolling back writes the old tree as a *new* commit
+(`read-tree -u --reset`, then commit) rather than rewriting or discarding
+anything: the state being replaced stays reachable, so a rollback is itself
+undoable and the log is a truthful record of what happened. Nothing here
+rewrites history, touches branches or remotes, or pushes.
+
+What gets recorded, and when:
+
+| Moment | Kind | Subject |
+| --- | --- | --- |
+| Editing settled (the watcher, once a minute) | `edit` | `Notes edited at <time>` |
+| Just before a sync applies anything | `local` | `Local edits before sync at <time>` |
+| A sync that moved something | `sync` | `Sync <time> — 3 up, 1 down` + the user's note |
+| A conflict settled | `conflict` | `Resolve <path> — took the cloud's version, at <time>` |
+| The user marked a moment | `checkpoint` | `Checkpoint at <time>` + their message |
+| A rollback | `rollback` | `Roll back to <short> — <subject>` |
+
+The kind rides in a `Thought-Mesh-Kind` trailer so the UI can label an entry
+without parsing (or translating) a subject line. A commit made by the user
+themselves has no kind and is shown as what it is — their history is this one.
+
+Two design points worth keeping:
+
+- **The watcher commits when writing *stops*, not when it happens.** Each tick
+  hashes the tree the vault would commit to and commits only when that hash is
+  unchanged since the previous tick. A commit per keystroke would bury the log;
+  a commit per tick would cut sentences in half. It is a tree hash rather than
+  `git status` output precisely because status reports *which* files are dirty
+  and so stops moving after the first keystroke.
+- **History replaces the pre-sync zip, it does not join it.** The commit taken
+  at the top of a sync is the same safety copy and a better one — incremental,
+  diffable, per-note. `cloud.Service` writes the zip only where history is
+  unavailable, so there is one undo path, whichever the machine can offer.
+- **Every operation is serialized.** Three callers reach the repository at once
+  — the watcher goroutine, the sync scheduler, and any HTTP handler — and they
+  all stage into the same index. Git refuses the collision rather than
+  corrupting anything, but a refusal is a lost commit and an error somebody has
+  to read, so a mutex on `Repo` makes them queue instead.
+
+An idle sync writes nothing: on an hourly schedule most runs move nothing, and
+an entry every hour saying so would bury the ones that matter. A run that
+actually moved something is recorded even when the vault itself is unchanged —
+an upload-only sync leaves the vault exactly as it was and is still the moment
+the notes went to Dropbox. So is a run the user annotated.
+
+## 8. Versioning, releases, deployment
 
 - **Calendar versioning `vYEAR.MONTH.<commit count>`** (the scheme from
   sand-vault): `Year`/`Month` are hand-bumped constants in
@@ -349,7 +423,7 @@ Rules that must hold:
   check rolls back to the previous commit or binary. The reference unit is
   `deploy/thoughtmesh.service`.
 
-## 8. Trust model
+## 9. Trust model
 
 There is **no auth**, by design, matching CountRoster: the server is meant
 for a trusted network — a LAN, a Tailscale tailnet, a VPN. Anyone who can
@@ -364,7 +438,7 @@ Operators wanting HTTPS or exposure beyond the LAN should front it with
 Tailscale Serve or a reverse proxy — the PWA install prefers https anyway,
 and the OAuth redirect flow requires it.
 
-## 9. Testing strategy
+## 10. Testing strategy
 
 - Go tests live next to the code, one suite per package, each building a
   fresh vault in `t.TempDir()`. The API tests pin the wire contract the PWA
@@ -376,22 +450,28 @@ and the OAuth redirect flow requires it.
   follow its cursor; a stale-revision upload must report a conflict, not a
   failure). The comparison table itself is tested directly, case by case, with
   no I/O at all.
+- The history tests drive the real `git` binary against a real vault, which is
+  the only way to check what that package promises: that what it writes is a
+  repository git itself agrees with. They skip where git is missing, which is
+  also the configuration the server supports. One of them runs six goroutines
+  at the repository to pin the serialization — without it, git reports
+  `Unable to create index.lock` and a commit is silently lost.
 - Web tests (vitest, jsdom, globals off) cover the markdown renderer —
   including "raw HTML never renders", "code fences stay literal" and
   "frontmatter is not content" — the category picker, and the time helpers.
 - Golden rule inherited from the versioning scheme: never assert the literal
   version string; its *shape* is pinned by `internal/version/version_test.go`.
 
-## 10. Non-goals (for now)
+## 11. Non-goals (for now)
 
-- **Auth/multi-user** — trusted-network deployment (see §8).
+- **Auth/multi-user** — trusted-network deployment (see §9).
 - **Attachments/images served from the vault** — the renderer shows remote
   images; serving vault-local files is future work in the server's static
   layer (cloud sync already carries them).
 - **Real-time collaborative editing** — 409-on-conflict, with a merge offered,
   is the intended model.
 - **Sub-file sync granularity** — a sync run compares whole files. Two people
-  typing into one note at the same time is what §10's first bullet rules out,
+  typing into one note at the same time is what §11's first bullet rules out,
   not what this is for.
 - **Plugins/themes** — the mesh primitives (files, links, graph) come first.
   See `docs/FEATURES.md` for the full product comparison with Obsidian.

@@ -28,8 +28,15 @@ Environment=HOST=0.0.0.0
 Restart=on-failure
 RestartSec=3
 
+# Version history keeps the vault as a git repository, so the service needs the
+# `git` binary on PATH. It is optional: without it the server simply runs with
+# history off (and cloud sync falls back to zip backups), which the startup log
+# says either way. ProtectSystem=strict leaves /usr readable, so nothing extra
+# is needed here — only that git is installed.
+
 # Hardening — safe on a trusted LAN, defensive if exposure ever widens.
-# The vault's data directory is the only writable path the service needs.
+# The vault's data directory is the only writable path the service needs; that
+# includes the .git directory inside the vault.
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

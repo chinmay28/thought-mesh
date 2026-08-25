@@ -18,6 +18,8 @@ import { renderMarkdown } from '../lib/markdown.tsx';
 import { relativeTime } from '../lib/time.ts';
 import { Editor } from '../components/Editor.tsx';
 import { CategoryPicker } from '../components/CategoryPicker.tsx';
+import { NoteHistory } from '../components/NoteHistory.tsx';
+import { restoreNoteVersion } from '../api/history.ts';
 
 const AUTOSAVE_MS = 900;
 
@@ -45,6 +47,7 @@ export function NotePage() {
   const [knownCategories, setKnownCategories] = useState<Category[]>([]);
   const [editingCategories, setEditingCategories] = useState(false);
   const [mergeNotice, setMergeNotice] = useState<number | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
 
   const editing = params.get('edit') === '1';
   const [draft, setDraft] = useState('');
@@ -264,6 +267,13 @@ export function NotePage() {
               Edit
             </button>
           )}
+          <button
+            type="button"
+            className={`btn btn--ghost${showHistory ? ' btn--active' : ''}`}
+            onClick={() => setShowHistory((open) => !open)}
+          >
+            History
+          </button>
           <button type="button" className="btn btn--ghost" onClick={() => void onRename()}>
             Rename
           </button>
@@ -318,6 +328,27 @@ export function NotePage() {
       </section>
 
       {error && <div className="banner banner--warn">{error}</div>}
+
+      {/* What this note said before. Loaded only when asked for: most visits
+          are to read or write the note, not to look back at it. */}
+      {showHistory && (
+        <section className="note-history" aria-label="Note history">
+          <h2 className="section-title">Earlier versions</h2>
+          <NoteHistory
+            path={note.path}
+            onError={setError}
+            onRestore={async (ref) => {
+              const restored = await restoreNoteVersion(note.path, ref);
+              setNote(restored);
+              setDraft(restored.content);
+              baseMtime.current = restored.mtime_ms;
+              baseContent.current = restored.content;
+              setSaveState('saved');
+            }}
+            onRestored={() => setShowHistory(false)}
+          />
+        </section>
+      )}
 
       {saveState === 'conflict' && (
         <div className="banner banner--warn" role="alert">

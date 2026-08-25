@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/chinmay28/thought-mesh/server/internal/history"
 	"github.com/chinmay28/thought-mesh/server/internal/merge"
 	"github.com/chinmay28/thought-mesh/server/internal/vault"
 )
@@ -99,7 +101,12 @@ type planItem struct {
 // Sync brings the vault and the connected folder into step, and records the
 // outcome in the settings the way every run does — success or failure, plus
 // the next deadline.
-func (s *Service) Sync(ctx context.Context) (*SyncResult, error) {
+//
+// `note` is what the user typed when they pressed Sync now, if anything. It
+// becomes the body of the commit the run produces, which is the whole point of
+// having somewhere to type it: six months later "before the trip" is the only
+// thing that will tell one of these apart from the next.
+func (s *Service) Sync(ctx context.Context, note string) (*SyncResult, error) {
 	set, err := s.Settings()
 	if err != nil {
 		return nil, err
@@ -111,14 +118,87 @@ func (s *Service) Sync(ctx context.Context) (*SyncResult, error) {
 		return nil, &ConfigError{Message: "Choose a folder in the connected account first."}
 	}
 
+	// Whatever is in the vault right now goes into the history before the run
+	// touches anything, so the pre-sync state stays reachable no matter what
+	// the sync pulls down next. This is the git-backed half of the pre-sync
+	// backup; see writePreSyncBackup for the half that runs without git.
+	if _, err := s.History.Commit(
+		"Local edits before sync at "+s.History.Stamp(), "", history.KindLocal,
+	); err != nil {
+		// A history that can't be written is not a reason to refuse to sync;
+		// the run is the thing the user asked for.
+		log.Printf("[thoughtmesh] vault history: %v", err)
+	}
+
 	result, runErr := s.runSync(ctx, *set.FolderID)
 	if err := s.recordRun(result, runErr); err != nil {
 		return nil, err
 	}
+	s.commitSync(result, note)
 	if runErr != nil {
 		return nil, runErr
 	}
 	return result, nil
+}
+
+// commitSync records the run: when it happened, what it moved, and whatever the
+// user typed when they pressed the button.
+//
+// An *idle* run writes nothing. On an hourly schedule most runs move nothing at
+// all, and an entry every hour saying so would bury the ones that matter. Any
+// run that actually did something gets an entry even when the vault itself is
+// unchanged — an upload-only sync leaves the vault exactly as it was, and it is
+// still the moment the notes went to Dropbox, which is the thing worth being
+// able to find later. So is a run the user annotated.
+func (s *Service) commitSync(result *SyncResult, note string) {
+	if result == nil {
+		return
+	}
+	worthRecording := result.moved() || strings.TrimSpace(note) != ""
+	subject := "Sync " + s.History.Stamp() + " — " + describeRun(result)
+	var err error
+	if worthRecording {
+		_, err = s.History.CommitAlways(subject, note, history.KindSync)
+	} else {
+		// Nothing happened, but commit anyway *if* the vault somehow changed
+		// underneath the run — that content still belongs in the history.
+		_, err = s.History.Commit(subject, note, history.KindSync)
+	}
+	if err != nil {
+		log.Printf("[thoughtmesh] vault history: %v", err)
+	}
+}
+
+// moved reports whether the run did anything at all.
+func (r *SyncResult) moved() bool {
+	return r.Uploaded+r.Downloaded+r.DeletedLocal+r.DeletedRemote+r.Failed+len(r.Conflicts) > 0
+}
+
+// describeRun is what a sync did, in the few words a commit subject has room
+// for. "everything was already in step" is the healthy outcome on a schedule
+// and deserves saying plainly — a bare "0 up, 0 down" reads like a failure,
+// which is exactly what it is not.
+func describeRun(result *SyncResult) string {
+	var parts []string
+	if result.Uploaded > 0 {
+		parts = append(parts, fmt.Sprintf("%d up", result.Uploaded))
+	}
+	if result.Downloaded > 0 {
+		parts = append(parts, fmt.Sprintf("%d down", result.Downloaded))
+	}
+	if deleted := result.DeletedLocal + result.DeletedRemote; deleted > 0 {
+		parts = append(parts, fmt.Sprintf("%d deleted", deleted))
+	}
+	if n := len(result.Conflicts); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d needing a decision", n))
+	}
+	if result.Failed > 0 {
+		parts = append(parts, fmt.Sprintf("%d failed", result.Failed))
+	}
+	if len(parts) == 0 {
+		return "everything was already in step"
+	}
+	return strings.Join(parts, ", ")
 }
 
 // runSync is one pass: read both sides, plan, apply.
@@ -307,10 +387,14 @@ func (s *Service) applyPlan(ctx context.Context, provider Provider, token, folde
 	var firstErr error
 
 	// Anything that would overwrite or delete a file in the vault gets a local
-	// safety copy first. Cloud sync is the one thing here that changes notes
-	// the user didn't just edit, so it keeps the undo path the old snapshot
-	// restore had: a zip of the vault as it was, beside the settings file.
-	if s.planTouchesLocalContent(plan) {
+	// safety copy first — cloud sync is the one thing here that changes notes
+	// the user didn't just edit, and it must always be undoable.
+	//
+	// Where there is a git history, the commit taken at the top of Sync already
+	// is that copy, and a better one: incremental, diffable, and per-note
+	// rather than all-or-nothing. The zip is the fallback for a machine
+	// without git, not a second belt.
+	if !s.History.Available() && s.planTouchesLocalContent(plan) {
 		backup, err := s.writePreSyncBackup()
 		if err != nil {
 			return nil, fmt.Errorf("pre-sync backup: %w", err)
@@ -726,7 +810,29 @@ func (s *Service) ResolveConflict(ctx context.Context, rel, resolution, mergedCo
 	}); err != nil {
 		return nil, err
 	}
+	// Settling a conflict is exactly the moment someone might later wish they
+	// had chosen the other way, so it gets an entry of its own rather than
+	// being folded into the next sync's.
+	if _, err := s.History.Commit(
+		"Resolve "+rel+" — "+resolutionPhrase(resolution)+", at "+s.History.Stamp(),
+		"", history.KindConflict,
+	); err != nil {
+		log.Printf("[thoughtmesh] vault history: %v", err)
+	}
 	return &c, nil
+}
+
+// resolutionPhrase says which way a conflict went, in a commit subject.
+func resolutionPhrase(resolution string) string {
+	switch resolution {
+	case ResolveKeepLocal:
+		return "kept this server's version"
+	case ResolveKeepRemote:
+		return "took the cloud's version"
+	case ResolveMerge:
+		return "merged both versions"
+	}
+	return resolution
 }
 
 // resolveKeepLocal pushes this server's version over the remote one — or
@@ -800,6 +906,25 @@ func (s *Service) pushResolved(ctx context.Context, provider Provider, token, fo
 		Hash: uploaded.Hash, Rev: uploaded.Rev,
 		Size: info.Size, MtimeMs: info.MtimeMs,
 	}, nil
+}
+
+// ForgetSyncState clears everything recorded about the two sides agreeing.
+//
+// Called after the vault is rewritten wholesale from outside the sync — a
+// rollback, say. The recorded hashes then describe files that are no longer
+// there, and the next run would read that as a pile of remote deletions and
+// push them. Forgetting instead makes it work the difference out from scratch,
+// which is exactly what a first run does.
+func (s *Service) ForgetSyncState() error {
+	set, err := s.Settings()
+	if err != nil {
+		return err
+	}
+	folderID := ""
+	if set.FolderID != nil {
+		folderID = *set.FolderID
+	}
+	return s.State.Reset(folderID, toISO(s.Now()))
 }
 
 // --- local pre-sync backups ---------------------------------------------------
@@ -903,6 +1028,11 @@ func (s *Service) RestoreBackup(name string) (int, error) {
 	files, err := s.Vault.RestoreZip(data)
 	if err != nil {
 		return 0, err
+	}
+	if _, err := s.History.Commit(
+		"Restore the vault from "+name+", at "+s.History.Stamp(), "", history.KindRestore,
+	); err != nil {
+		log.Printf("[thoughtmesh] vault history: %v", err)
 	}
 	set, err := s.Settings()
 	if err != nil {

@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/chinmay28/thought-mesh/server/internal/cloud"
+	"github.com/chinmay28/thought-mesh/server/internal/history"
 	"github.com/chinmay28/thought-mesh/server/internal/mesh"
 	"github.com/chinmay28/thought-mesh/server/internal/vault"
 	"github.com/chinmay28/thought-mesh/server/internal/version"
@@ -55,8 +56,12 @@ type noteJSON struct {
 // New builds the API handler. `cl` may be nil — a server without cloud sync
 // (an API-only test harness) leaves the cloud routes unregistered, and the
 // web client treats a 404 there as "this server doesn't do cloud sync".
-func New(v *vault.Vault, m *mesh.Mesh, cl *cloud.Service) http.Handler {
-	s := &server{v: v, m: m, cloud: cl}
+// `h` may be nil — a machine without git, or a deployment that turned history
+// off — in which case the routes are still registered and answer `available:
+// 0` rather than 404, so the client can tell "no history here" from "a server
+// too old to have the feature".
+func New(v *vault.Vault, m *mesh.Mesh, cl *cloud.Service, h *history.Repo) http.Handler {
+	s := &server{v: v, m: m, cloud: cl, history: h}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", s.health)
 	mux.HandleFunc("GET /api/notes", s.listNotes)
@@ -72,6 +77,12 @@ func New(v *vault.Vault, m *mesh.Mesh, cl *cloud.Service) http.Handler {
 	mux.HandleFunc("POST /api/categories/rename", s.renameCategory)
 	mux.HandleFunc("POST /api/categories/delete", s.deleteCategory)
 	mux.HandleFunc("POST /api/categories/assign", s.setNoteCategories)
+	mux.HandleFunc("GET /api/history", s.listHistory)
+	mux.HandleFunc("POST /api/history/checkpoint", s.checkpointHistory)
+	mux.HandleFunc("POST /api/history/rollback", s.rollbackHistory)
+	mux.HandleFunc("POST /api/history/restore", s.restoreNoteVersion)
+	mux.HandleFunc("GET /api/history/notes/{path...}", s.noteHistory)
+	mux.HandleFunc("GET /api/history/version/{path...}", s.showNoteVersion)
 	if s.cloud != nil {
 		mux.HandleFunc("GET /api/cloud/sync", s.cloudSyncSettings)
 		mux.HandleFunc("PATCH /api/cloud/sync", s.cloudSyncUpdate)
@@ -96,9 +107,10 @@ func New(v *vault.Vault, m *mesh.Mesh, cl *cloud.Service) http.Handler {
 }
 
 type server struct {
-	v     *vault.Vault
-	m     *mesh.Mesh
-	cloud *cloud.Service
+	v       *vault.Vault
+	m       *mesh.Mesh
+	cloud   *cloud.Service
+	history *history.Repo
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {
@@ -118,6 +130,7 @@ func writeErr(w http.ResponseWriter, status int, msg string) {
 // is a failure that came from Dropbox rather than from us (502).
 func handleErr(w http.ResponseWriter, err error) {
 	var ve *vault.ValidationError
+	var hv *history.ValidationError
 	var nf *vault.NotFoundError
 	var ex *vault.ExistsError
 	var st *vault.StaleError
@@ -126,6 +139,8 @@ func handleErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.As(err, &ve):
 		writeErr(w, http.StatusBadRequest, ve.Error())
+	case errors.As(err, &hv):
+		writeErr(w, http.StatusBadRequest, hv.Error())
 	case errors.As(err, &nf):
 		writeErr(w, http.StatusNotFound, nf.Error())
 	case errors.As(err, &ex):

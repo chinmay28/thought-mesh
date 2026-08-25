@@ -253,7 +253,16 @@ func (s *server) cloudSyncFolders(w http.ResponseWriter, r *http.Request) {
 // the settings *and* returned, so the button reports it instead of quietly
 // looking successful.
 func (s *server) cloudSyncRun(w http.ResponseWriter, r *http.Request) {
-	result, err := s.cloud.Sync(r.Context())
+	body, err := decodeLoose(r)
+	if err != nil {
+		handleErr(w, err)
+		return
+	}
+	// An optional note from whoever pressed the button. It becomes the body of
+	// the commit this run produces — six months later it is the only thing
+	// that will tell one sync apart from the next.
+	note, _ := body["message"].(string)
+	result, err := s.cloud.Sync(r.Context(), note)
 	if err != nil {
 		handleErr(w, err)
 		return

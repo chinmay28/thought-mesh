@@ -118,7 +118,8 @@ Consequences, both ways:
 | Same data on every device | 💰 Obsidian Sync, or DIY (iCloud/Syncthing/git) | ✅ inherent — one server, every client sees the same vault instantly |
 | Mobile apps | ✅ native iOS/Android | ✅ installable PWA (Add to Home Screen), no app store |
 | End-to-end encrypted sync | ✅ with Obsidian Sync | n/a — data never leaves your network unless you enable Dropbox sync |
-| Version history | 💰 Sync history; File Recovery core plugin | ⚠️ no built-in history; quickstart snapshots the vault on every upgrade, and the vault is git-friendly |
+| Version history | 💰 Sync history; File Recovery core plugin | ✅ built in: the vault is a git repository the server commits a couple of minutes after you stop writing and around every sync. A note shows its own earlier versions and can be put back to one; the whole vault can be rolled back — itself recorded as a new version, so that is undoable too. Needs `git` installed |
+| Roll back a mistake | ⚠️ File Recovery snapshots, per file | ✅ per note or the whole vault, from any recorded version, with `git log` in the vault as the escape hatch |
 | Cloud sync | 💰 Obsidian Sync, or DIY | ✅ built-in two-way sync with a folder in your Dropbox (hourly/daily/weekly/monthly or on demand). The folder is your vault as an ordinary directory tree, so notes edited or deleted elsewhere come back; OAuth app registered per deployment, tokens stored outside the vault |
 | Conflict resolution | ⚠️ Sync keeps both copies as separate files | ✅ neither version is overwritten: keep mine, take theirs, or merge — with a three-way merge that combines edits to different parts of a note and marks only what genuinely collides. Same three choices when a save lands on a note that moved underneath the editor |
 | Restore from backup | reinstall + resync | ✅ the server zips the vault before any sync that would replace or delete a note locally; "Undo a sync" on the Sync tab puts one back (and a backup is just a zip, so unzipping by hand works too) |
@@ -131,7 +132,7 @@ Consequences, both ways:
 | Cost | free; Sync/Publish paid; commercial license for work use (policy has varied) | free, self-hosted; your only cost is the hardware you already run |
 | Telemetry | minimal, closed client | none; the server serves you and no one else |
 | Data leaves your machines | only via sync/publish | only if you enable Dropbox sync |
-| Auth | n/a (local app) | ⚠️ none — trusted-network deployment (LAN/Tailscale/VPN); see ARCHITECTURE.md §8 |
+| Auth | n/a (local app) | ⚠️ none — trusted-network deployment (LAN/Tailscale/VPN); see ARCHITECTURE.md §9 |
 
 ## When to choose which
 
@@ -155,8 +156,10 @@ network share) whenever you want its editor — the files are the same.
 3. Tables and a broader markdown subset in the renderer.
 4. Tags as first-class (categories are; `#tag` is still plain text), and
    search operators.
-5. Unlinked mentions.
-6. Templates beyond the daily note.
+5. A diff view between two versions of a note (today you read one and put it
+   back; the comparison is `git diff` in the vault).
+6. Unlinked mentions.
+7. Templates beyond the daily note.
 
 Gaps are gaps, not promises — but the architecture (server-side mesh, thin
 client) has room for all of these without new storage or new dependencies.

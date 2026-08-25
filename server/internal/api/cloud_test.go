@@ -113,10 +113,11 @@ func newCloudServer(t *testing.T) (http.Handler, *vault.Vault, *stubProvider) {
 		cloud.NewStore(settings),
 		cloud.NewStateStore(settings),
 		v,
+		nil, // no git history: these tests pin the zip-backup fallback path
 		cloud.Registry{provider},
 		func() time.Time { return time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC) },
 		"")
-	return New(v, mesh.New(v), svc), v, provider
+	return New(v, mesh.New(v), svc, nil), v, provider
 }
 
 // connected walks the paste flow and picks a folder — where every sync-level

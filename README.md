@@ -29,6 +29,14 @@ app so every device shares one vault:
   deployment registers its own OAuth app (no shipped credentials), and the
   stored grant lives *outside* the vault so it can never leak into a vault you
   sync by other means.
+- **Every version of every note, kept.** Your vault is an ordinary git
+  repository, and the server commits it a couple of minutes after you stop
+  writing and around every sync — so "what did this note say last week?" is a
+  tap on the note, and putting that version back is another. The whole vault
+  can be rolled back to any point, and rolling back is itself just another
+  version, so it can be undone the same way. Nothing is ever rewritten, and
+  `git log` in your vault reads it all without Thought Mesh in the loop.
+  (Needs `git` installed; without it the server says so and carries on.)
 - **Conflicts are yours to settle.** When the same note changed in two places,
   nothing is overwritten: both versions stay put and you choose — keep mine,
   take theirs, or merge them. The merge combines edits to different parts of

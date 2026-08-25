@@ -25,6 +25,15 @@ import {
   type CloudSyncResult,
   type CloudSyncState,
 } from '../api/cloud.ts';
+import {
+  HISTORY_KIND_LABELS,
+  checkpointHistory,
+  fetchHistory,
+  historyDetail,
+  rollbackHistory,
+  type HistoryCommit,
+  type HistoryState,
+} from '../api/history.ts';
 import { formatDateTime } from '../lib/time.ts';
 
 /** One step of the folder picker's trail, so "up" is just a pop. */
@@ -62,6 +71,9 @@ export function SyncPage() {
   const [restoring, setRestoring] = useState(false);
   // The conflict whose two versions are open for comparison, if any.
   const [openConflict, setOpenConflict] = useState<string | null>(null);
+  const [history, setHistory] = useState<HistoryState | null>(null);
+  // What the user typed to go with a manual sync, if anything.
+  const [note, setNote] = useState('');
   const [setupFor, setSetupFor] = useState<string | null>(null);
   // A paste-mode authorization in progress: the user is off at the provider,
   // and we're waiting for the code they'll bring back. The provider id rides
@@ -89,6 +101,18 @@ export function SyncPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const loadHistory = useCallback(async () => {
+    try {
+      setHistory(await fetchHistory(30));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadHistory();
+  }, [loadHistory]);
 
   // The OAuth callback lands the browser back here with the outcome in the
   // query string (the provider redirects a whole navigation, so there's no
@@ -195,11 +219,43 @@ export function SyncPage() {
 
   function syncNow() {
     return run('run', async () => {
-      const { result, settings } = await runCloudSync();
+      const { result, settings } = await runCloudSync(note);
       setState((prev) =>
         prev ? { ...prev, settings, conflicts: result.conflicts } : prev,
       );
+      setNote('');
       setMessage(describeRun(result));
+      void loadHistory();
+    });
+  }
+
+  function checkpoint(message: string) {
+    return run('checkpoint', async () => {
+      setHistory(await checkpointHistory(message));
+      setMessage('Marked this moment in the vault’s history.');
+    });
+  }
+
+  function rollback(commit: HistoryCommit) {
+    // The one action here that rewrites every note at once, so the confirm
+    // spells out both what happens and why it is still undoable.
+    if (
+      !window.confirm(
+        `Put the whole vault back to ${formatDateTime(new Date(commit.at_ms).toISOString())}?\n\n` +
+          `Notes written since then are removed and notes changed since then go ` +
+          `back. Nothing is erased: this is recorded as a new version, so it can ` +
+          `be undone the same way.`,
+      )
+    ) {
+      return;
+    }
+    return run(`rollback:${commit.ref}`, async () => {
+      setHistory(await rollbackHistory(commit.ref));
+      await load();
+      setMessage(
+        `The vault is back to how it was on ` +
+          `${formatDateTime(new Date(commit.at_ms).toISOString())}.`,
+      );
     });
   }
 
@@ -495,6 +551,25 @@ export function SyncPage() {
             </button>
           </div>
 
+          {/* An optional note to go with a manual sync. It becomes the message
+              on the version this run records — six months from now it is the
+              only thing that will tell one of these apart from the next. */}
+          {settings.folder_id !== null && history?.available === 1 && (
+            <label className="field cloud__note">
+              <span className="field__label">
+                Note for this sync <span className="muted">(optional)</span>
+              </span>
+              <input
+                className="field__input"
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="e.g. before the trip"
+                maxLength={200}
+                disabled={busy !== null}
+              />
+            </label>
+          )}
+
           <CloudStatus settings={settings} />
 
           {/* The undo path, below the sync controls: rarer, heavier, and only
@@ -519,9 +594,136 @@ export function SyncPage() {
         </div>
       )}
 
+      {/* Version history stands on its own: it is the vault's, not the cloud
+          account's, and it works whether or not Dropbox is ever set up. */}
+      <VaultHistory
+        history={history}
+        busy={busy}
+        onCheckpoint={(text) => void checkpoint(text)}
+        onRollback={(commit) => void rollback(commit)}
+      />
+
       {message && <p className="cloud__ok">{message}</p>}
       {error && <p className="cloud__error">{error}</p>}
     </div>
+  );
+}
+
+/**
+ * The vault's own history: every version, and the way back to one.
+ *
+ * It sits below cloud sync but does not belong to it — the server keeps this
+ * whether or not an account is ever connected, because the thing worth being
+ * able to undo is usually your own writing rather than a sync.
+ */
+function VaultHistory({
+  history,
+  busy,
+  onCheckpoint,
+  onRollback,
+}: {
+  history: HistoryState | null;
+  busy: string | null;
+  onCheckpoint: (message: string) => void;
+  onRollback: (commit: HistoryCommit) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState('');
+
+  if (history === null) {
+    return null;
+  }
+  if (history.available === 0) {
+    return (
+      <section className="cloud__history" aria-label="Version history">
+        <h2 className="section-title">Version history</h2>
+        <p className="muted">
+          This server keeps none. It needs <code>git</code> installed — the vault
+          is then an ordinary git repository, every version of every note is kept
+          in it, and any of them can be put back.
+        </p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="cloud__history" aria-label="Version history">
+      <h2 className="section-title">Version history</h2>
+      <p className="muted">
+        Your vault is a git repository, so every version of every note is kept —
+        recorded a couple of minutes after you stop writing, and around every
+        sync. Nothing here erases anything: rolling back is itself a new version.
+      </p>
+
+      <form
+        className="cloud__checkpoint"
+        onSubmit={(e) => {
+          e.preventDefault();
+          onCheckpoint(draft);
+          setDraft('');
+        }}
+      >
+        <input
+          className="field__input"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="Mark this moment — e.g. before the big rewrite"
+          aria-label="Checkpoint message"
+          maxLength={200}
+          disabled={busy !== null}
+        />
+        <button type="submit" className="btn" disabled={busy !== null}>
+          {busy === 'checkpoint' ? 'Saving…' : 'Save a checkpoint'}
+        </button>
+      </form>
+
+      {history.commits.length === 0 ? (
+        <p className="muted">No versions recorded yet.</p>
+      ) : (
+        <>
+          <ul className="history__list">
+            {(open ? history.commits : history.commits.slice(0, 5)).map((commit, index) => (
+              <li key={commit.ref} className="history__entry">
+                <div className="history__row">
+                  <span className="history__open history__open--static">
+                    <span className="history__when">
+                      {formatDateTime(new Date(commit.at_ms).toISOString())}
+                    </span>
+                    <span className="history__kind">
+                      {index === 0 && !open ? 'Now' : HISTORY_KIND_LABELS[commit.kind]}
+                    </span>
+                    {historyDetail(commit) && (
+                      <span className="history__subject">{historyDetail(commit)}</span>
+                    )}
+                    {commit.body && <span className="history__note">{commit.body}</span>}
+                  </span>
+                  {/* Rolling back to the newest version would do nothing. */}
+                  {index > 0 && (
+                    <button
+                      type="button"
+                      className="btn btn--small"
+                      disabled={busy !== null}
+                      onClick={() => onRollback(commit)}
+                    >
+                      {busy === `rollback:${commit.ref}` ? 'Restoring…' : 'Roll back'}
+                    </button>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+          {history.commits.length > 5 && (
+            <button
+              type="button"
+              className="btn btn--ghost btn--small"
+              onClick={() => setOpen((shown) => !shown)}
+            >
+              {open ? 'Show fewer' : `Show all ${history.commits.length}`}
+            </button>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 
