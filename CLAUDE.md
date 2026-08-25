@@ -94,6 +94,21 @@ add hidden state files to the vault. Path validation is hard at this boundary
 wikilinks or synced filesystems). Writes are write-then-rename so a crash never
 truncates a note; hidden entries (`.git`, `.obsidian`, `.trash`) are skipped.
 
+**Categories are frontmatter, not a database** (`vault/frontmatter.go`). A
+note's categories live in a YAML block at the top of the file itself, where
+Obsidian and every other markdown tool looks — that's the "files are the data"
+rule applied to metadata, and it's why a category survives the note leaving
+this server. There is no registry and no "create a category" step: a category
+exists exactly as long as some note declares it. The parser is deliberately
+tiny rather than a YAML dependency — it rewrites one key and copies every other
+frontmatter line through byte for byte, so metadata other tools wrote survives
+a category change. Keep it that way.
+
+`vault/files.go` is file-level access for cloud sync, which mirrors the whole
+folder (attachments included), not just the notes. `CleanFilePath` is looser
+than `CleanPath` — an attachment's name isn't ours to choose — and just as hard
+on traversal, absolute paths and hidden segments.
+
 ### The mesh is derived, never persisted
 
 `internal/mesh` computes link structure per request via `Snapshot()`: a
@@ -111,6 +126,11 @@ alone) — using the bare name when unambiguous after the move, the full path
 otherwise. That guarantee is why renames must use the API, never a bare file
 move.
 
+Categories are derived here too, cached on the same `(mtime, size)` key as
+links. `Mesh.RenameCategory` rewrites every note carrying a name for the same
+reason `Rename` rewrites wikilinks: leaving half the notes on the old spelling
+would silently split one category into two.
+
 ### The wire contract is pinned
 
 Snake_case JSON, integer flags, explicit `""`/`[]` over nulls, `{"error": …}`
@@ -121,34 +141,67 @@ Domain errors map in `api.handleErr`: `ValidationError`→400,
 for optimistic concurrency — a mismatch is a 409, and the client offers "load
 theirs / keep mine".
 
-### Automatic cloud sync lives in `internal/cloud`
+### Two-way cloud sync lives in `internal/cloud`
 
-`server/internal/cloud` zips the whole vault (`vault.Zip` — every non-hidden
-file, structure preserved) and uploads it to a Dropbox folder on a schedule
-(`off|hourly|daily|weekly|monthly`), configured from the Sync page — and
-restores from any `.vault.zip` snapshot in that folder. Ported from
-CountRoster's cloud backup with the same three layers, and only one of them
-knows a third party exists: `Provider` (OAuth + browse + upload/download),
-`Service` (settings, token refresh, when the next run is due, restore),
-`Scheduler` (a goroutine polling once a minute). Provider base URLs are
-struct fields so tests point them at `httptest` servers.
+`server/internal/cloud` keeps the vault and a folder in the user's Dropbox in
+step, on a schedule (`off|hourly|daily|weekly|monthly`) set from the Sync page.
+The folder holds the vault as a **plain directory tree** — same notes, same
+folders, ordinary markdown — not an archive of it.
 
-**Restore order is load-bearing** (`Service.Restore`): download + validate
-first, then write a local pre-restore backup of the vault beside the settings
-file, then `vault.RestoreZip` — which itself rejects hostile archives
-(traversal/absolute/hidden paths, size caps) and stages to a temp directory
-before swapping, so any failure leaves the vault untouched. A restore is a
-replace, not a merge; hidden entries (`.git`, `.obsidian`) survive. Don't
-reorder these steps or turn restore into a merge.
+**A run compares three things, not two.** The vault, the remote listing, and
+what both sides held when they last agreed. Without that third version nothing
+is decidable: "differs from Dropbox" looks the same whether the note was edited
+here, there, or in both places, and a file on one side only is equally an
+addition there or a deletion here. The record lives in `state.go` (content hash
++ provider revision, per path) and yields, per path: local moved → push; remote
+moved → pull; absence on one side → propagate the deletion; both moved
+differently → **conflict**. `decide()` is that table written out, and it is
+tested case by case with no I/O — keep it that way.
+
+**Conflicts are parked, never guessed.** A contested path is left exactly as it
+is on both sides and skipped by later runs until resolved, while the rest of
+the tree syncs. The user picks keep-mine / take-theirs / merge, and every
+resolution ends with *both* sides holding the same bytes and that agreement
+recorded — fixing one side alone brings the conflict straight back next run.
+The merge is `internal/merge`, a line-level diff3 against the cached base
+version; it combines edits to different regions silently and marks only what
+both sides rewrote. The same engine backs `POST /api/merge`, so an editor save
+conflict and a sync conflict resolve identically. Don't replace the markers
+with a silent pick.
+
+Three layers, and only one knows a third party exists: `Provider` (OAuth +
+browse + list tree + per-file upload/download/delete, converting to and from
+vault-relative paths itself), `Service` (settings, sync state, token refresh,
+the comparison and its application, conflict resolution), `Scheduler` (a
+goroutine polling once a minute). Provider base URLs are struct fields so tests
+point them at `httptest` servers.
+
+**Local pre-sync backups are the undo button.** A run about to overwrite or
+delete anything in the vault zips it first, beside the settings file — never
+inside the vault, or the backup would be swept into the next sync and upload
+the vault into itself. They're listable and restorable from the Sync page;
+restoring one clears the sync state, since the vault now holds something the
+cloud has never seen. Keep `vault.Zip`/`vault.RestoreZip` staging to a temp
+directory and rejecting hostile archives (traversal/absolute/hidden paths, size
+caps) before touching anything.
 
 Rules to preserve (mostly inherited from CountRoster):
 
-- **Settings and tokens live in a JSON file OUTSIDE the vault**
+- **Settings, tokens and sync state live in files OUTSIDE the vault**
   (`cloud.Store`, default `thoughtmesh-cloud.json` beside the vault directory,
-  written 0600 and atomically). Never move this state into the vault: the
-  vault is exactly what users sync/copy/version by other means, and a token
-  inside it leaks with the first push. Tokens **never leave over the API**
-  either — `cloud.PublicSettings` is redacted.
+  written 0600 and atomically; `cloud.StateStore` beside it). Never move any of
+  it into the vault: the vault is exactly what users sync/copy/version by other
+  means — a token inside it leaks with the first push, and bookkeeping inside
+  it would be restored onto machines it doesn't describe. Tokens **never leave
+  over the API** either — `cloud.PublicSettings` is redacted.
+- **Uploads are conditional on the revision we last saw.** That's the last
+  guard against a write landing in Dropbox between a run's listing and its
+  upload; a refusal becomes an ordinary conflict, not a failed run.
+- **Changing the destination folder resets the sync state**, and so does
+  disconnecting. The same path in a different folder is a different file, and
+  the stale hashes would read as "everything was deleted remotely".
+- **A file-level failure doesn't abort the run.** One note that couldn't
+  upload is no reason to leave the rest out of step.
 - **No shipped OAuth identity.** A self-hosted server has an unpredictable
   origin and providers pre-register redirect URIs, so one shipped client id
   can't serve every install. Each deployment registers its own Dropbox app;
@@ -174,6 +227,14 @@ came from Dropbox). `api.New` takes the service as its third argument and
 skips the routes when it's nil — the web client treats a 404 on
 `GET /api/cloud/sync` as "this server doesn't do cloud sync".
 
+### Conflicts always offer three ways out
+
+Wherever two versions of a note collide — a save against a file that moved
+under the editor, or a sync where both sides changed — the user gets keep-mine,
+take-theirs *and* merge. Never reduce that to two, and never resolve a merge by
+picking a side behind the user's back: the markers exist so the person who
+wrote both halves can see them.
+
 ### The web client renders markdown itself
 
 `apps/web/src/lib/markdown.tsx` is a deliberate hand-rolled markdown → React
@@ -181,8 +242,10 @@ renderer (no dependency): output is React elements built from text, so note
 content can never inject HTML, and wikilinks render as router `<Link>`s —
 resolved ones solid, missing ones dashed and leading to the create form. Keep
 it dependency-free. Single newlines render as line breaks (the note-taking
-convention). The editor is a plain textarea with a toolbar and a `[[`
-autocomplete chip bar (see `src/components/Editor.tsx`).
+convention). Frontmatter is stripped before rendering — and only at the top
+level, so a `---` inside a blockquote is still the rule it looks like. The
+editor is a plain textarea with a toolbar and a `[[` autocomplete chip bar (see
+`src/components/Editor.tsx`).
 
 ### Versioning is the calendar `vYEAR.MONTH.<commit count>`
 

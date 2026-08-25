@@ -615,6 +615,10 @@ func (s *Service) ConflictDetail(ctx context.Context, rel string) (*ConflictDeta
 	merged := merge.Merge(baseText, localText, remoteText, hasBase)
 	detail.Local, detail.Remote, detail.Base = localText, remoteText, baseText
 	detail.Merged, detail.MergeConflicts = merged.Text, merged.Conflicts
+	// Report what the merge was actually taken against, not what was available
+	// when the conflict was recorded: the cached base can have been evicted, or
+	// turn out not to be text, since then.
+	detail.HasBase = 0
 	if hasBase {
 		detail.HasBase = 1
 	}

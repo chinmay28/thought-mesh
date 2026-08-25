@@ -45,7 +45,7 @@ Consequences, both ways:
 | No proprietary database | ✅ | ✅ no database at all; derived data recomputed from files |
 | Vault portable to other tools | ✅ | ✅ same files; grep/git/Syncthing all work |
 | YAML front matter / properties | ✅ parsed, editable UI | ⚠️ preserved verbatim but not parsed — shown as text |
-| Attachments (images, PDFs) stored in vault | ✅ managed, embedded | ⚠️ files survive, ride along in snapshots and zips, but aren't served/rendered yet |
+| Attachments (images, PDFs) stored in vault | ✅ managed, embedded | ⚠️ files survive and are carried by cloud sync and backups, but aren't served/rendered yet |
 | Multiple vaults | ✅ vault switcher | ⚠️ one vault per server process (run two servers for two vaults) |
 | File formats beyond markdown | ✅ views images/PDF/canvas | ❌ markdown only |
 
@@ -87,6 +87,7 @@ Consequences, both ways:
 | Full-text search | ✅ | ✅ server-side, name matches ranked first, line snippets |
 | Search operators (`path:`, `tag:`, regex) | ✅ | ❌ plain case-insensitive substring |
 | Tags (`#tag`) as first-class objects | ✅ | ❌ they're just text (searchable) |
+| Categories on a note | ⚠️ via tags or frontmatter properties | ✅ first-class: assign, change and rename them; the notes list filters by one. Stored as `categories:` in the note's own YAML frontmatter, so Obsidian sees them as a property and `grep` finds them |
 | Quick switcher | ✅ `Ctrl+O` fuzzy | ⚠️ the search box covers it; no dedicated fuzzy switcher |
 
 ## Graph
@@ -116,10 +117,11 @@ Consequences, both ways:
 | --- | --- | --- |
 | Same data on every device | 💰 Obsidian Sync, or DIY (iCloud/Syncthing/git) | ✅ inherent — one server, every client sees the same vault instantly |
 | Mobile apps | ✅ native iOS/Android | ✅ installable PWA (Add to Home Screen), no app store |
-| End-to-end encrypted sync | ✅ with Obsidian Sync | n/a — data never leaves your network unless you enable Dropbox snapshots |
+| End-to-end encrypted sync | ✅ with Obsidian Sync | n/a — data never leaves your network unless you enable Dropbox sync |
 | Version history | 💰 Sync history; File Recovery core plugin | ⚠️ no built-in history; quickstart snapshots the vault on every upgrade, and the vault is git-friendly |
-| Cloud backup | via sync services | ✅ built-in: scheduled zip of the whole vault to your Dropbox (hourly/daily/weekly/monthly or on demand), OAuth app registered per deployment, tokens stored outside the vault |
-| Restore from backup | reinstall + resync | ✅ one tap from the Sync tab: pick any snapshot in the folder and the server swaps it in — after saving a local backup of the current vault first (and a snapshot is just a zip, so unzipping by hand works too) |
+| Cloud sync | 💰 Obsidian Sync, or DIY | ✅ built-in two-way sync with a folder in your Dropbox (hourly/daily/weekly/monthly or on demand). The folder is your vault as an ordinary directory tree, so notes edited or deleted elsewhere come back; OAuth app registered per deployment, tokens stored outside the vault |
+| Conflict resolution | ⚠️ Sync keeps both copies as separate files | ✅ neither version is overwritten: keep mine, take theirs, or merge — with a three-way merge that combines edits to different parts of a note and marks only what genuinely collides. Same three choices when a save lands on a note that moved underneath the editor |
+| Restore from backup | reinstall + resync | ✅ the server zips the vault before any sync that would replace or delete a note locally; "Undo a sync" on the Sync tab puts one back (and a backup is just a zip, so unzipping by hand works too) |
 
 ## Openness, cost, privacy
 
@@ -128,7 +130,7 @@ Consequences, both ways:
 | Source | proprietary (free to use) | ✅ open source, AGPL-3.0-only |
 | Cost | free; Sync/Publish paid; commercial license for work use (policy has varied) | free, self-hosted; your only cost is the hardware you already run |
 | Telemetry | minimal, closed client | none; the server serves you and no one else |
-| Data leaves your machines | only via sync/publish | only if you enable Dropbox snapshots |
+| Data leaves your machines | only via sync/publish | only if you enable Dropbox sync |
 | Auth | n/a (local app) | ⚠️ none — trusted-network deployment (LAN/Tailscale/VPN); see ARCHITECTURE.md §8 |
 
 ## When to choose which
@@ -141,8 +143,8 @@ sync.
 **Choose Thought Mesh** if you want the Obsidian *data model* — plain
 markdown, wikilinks, backlinks, graph — with zero sync management: one
 self-hosted server, every device a browser tab or home-screen app, always
-looking at the same notes, with scheduled off-site snapshots to your own
-Dropbox and an AGPL codebase you can read and change. They aren't mutually
+looking at the same notes, with scheduled two-way sync to your own Dropbox and
+an AGPL codebase you can read and change. They aren't mutually
 exclusive: point Obsidian at a copy of the vault (or the vault itself over a
 network share) whenever you want its editor — the files are the same.
 
@@ -151,7 +153,8 @@ network share) whenever you want its editor — the files are the same.
 1. Attachments: serving and rendering vault-local images.
 2. `#heading` scroll targets and per-note local graph.
 3. Tables and a broader markdown subset in the renderer.
-4. Tags as first-class, and search operators.
+4. Tags as first-class (categories are; `#tag` is still plain text), and
+   search operators.
 5. Unlinked mentions.
 6. Templates beyond the daily note.
 

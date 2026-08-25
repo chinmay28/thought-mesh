@@ -33,6 +33,19 @@ export interface CloudProviderInfo {
   supports_code_paste: 0 | 1;
 }
 
+/** What one sync moved. A sync's outcome is a handful of counts rather than a
+ * file name — the difference between mirroring a tree and dropping an archive
+ * in a folder. */
+export interface CloudRunSummary {
+  uploaded: number;
+  downloaded: number;
+  deleted_local: number;
+  deleted_remote: number;
+  unchanged: number;
+  conflicts: number;
+  failed: number;
+}
+
 /** The server's cloud sync configuration, with every token redacted. */
 export interface CloudSyncSettings {
   provider: string | null;
@@ -45,7 +58,54 @@ export interface CloudSyncSettings {
   last_run_at: string | null;
   last_status: 'ok' | 'error' | null;
   last_error: string | null;
-  last_file_name: string | null;
+  last_result: CloudRunSummary | null;
+}
+
+/**
+ * One path both sides changed since they last agreed, waiting on a decision.
+ *
+ * Nothing is transferred for a conflicted path — neither version is touched —
+ * until it is resolved, so a contested note can sit here without either copy
+ * being lost.
+ */
+export interface CloudConflict {
+  path: string;
+  local_hash: string;
+  remote_hash: string;
+  remote_rev: string;
+  base_hash: string;
+  local_size: number;
+  remote_size: number;
+  /** 1 when this side deleted the file while the other kept editing it. */
+  local_missing: 0 | 1;
+  remote_missing: 0 | 1;
+  /** 1 when both versions are text, so a merge can be offered at all. */
+  mergeable: 0 | 1;
+  /** 1 when the version the two sides diverged from is still available, which
+   * is what makes the merge a real three-way one. */
+  has_base: 0 | 1;
+  detected_at: string;
+}
+
+/** Both versions of a contested path, plus a merge already computed. */
+export interface CloudConflictDetail extends CloudConflict {
+  local: string;
+  remote: string;
+  base: string;
+  merged: string;
+  /** Regions the merge couldn't settle by itself; 0 means it's ready to save. */
+  merge_conflicts: number;
+}
+
+/** How a conflict is settled. */
+export type CloudResolution = 'keep_local' | 'keep_remote' | 'merge';
+
+/** One local pre-sync copy of the vault — the undo path for a sync that
+ * pulled down something unwelcome. */
+export interface CloudBackup {
+  name: string;
+  size: number;
+  modified_ms: number;
 }
 
 export type CloudSyncFrequency = 'off' | 'hourly' | 'daily' | 'weekly' | 'monthly';
@@ -65,6 +125,10 @@ export const CLOUD_FREQUENCIES: ReadonlyArray<{
 export interface CloudSyncState {
   settings: CloudSyncSettings;
   providers: CloudProviderInfo[];
+  /** The paths waiting on a decision. They ride along with the settings
+   * because an unresolved conflict is the one thing on the Sync page that
+   * stops being in step until somebody acts. */
+  conflicts: CloudConflict[];
   /**
    * The exact redirect URI to register with the provider. The server derives
    * it from the origin this request arrived on, so the setup form can show
@@ -86,9 +150,22 @@ export interface CloudFolder {
   path: string;
 }
 
-export interface CloudRunResult {
-  file_name: string;
-  bytes: number;
+export interface CloudSyncResult {
+  uploaded: number;
+  downloaded: number;
+  deleted_local: number;
+  deleted_remote: number;
+  unchanged: number;
+  conflicts: CloudConflict[];
+  /** The pre-sync copy of the vault, written only when the run was about to
+   * overwrite or delete something locally. "" otherwise. */
+  backup_file: string;
+  failed: number;
+  error: string;
+}
+
+export interface CloudRunResponse {
+  result: CloudSyncResult;
   settings: CloudSyncSettings;
 }
 
@@ -183,39 +260,63 @@ export async function listCloudFolders(folderId?: string): Promise<CloudFolder[]
   return body.folders;
 }
 
-/** Zip the vault and upload it right now, outside the schedule. */
-export function runCloudSync(): Promise<CloudRunResult> {
+/**
+ * Sync now, outside the schedule.
+ *
+ * "Sync" is bidirectional: local changes go up, remote ones come down,
+ * deletions propagate both ways, and anything both sides changed comes back in
+ * `result.conflicts` with neither version touched.
+ */
+export function runCloudSync(): Promise<CloudRunResponse> {
   return request('POST', '/sync/run', {});
 }
 
-/** One vault snapshot sitting in the connected folder — a restore candidate. */
-export interface CloudSnapshot {
-  id: string; // the provider's handle; what restore takes
-  name: string;
-  size: number;
-  modified_ms: number;
-}
-
-/** List the `.vault.zip` snapshots in the connected folder, newest first. */
-export async function listCloudSnapshots(): Promise<CloudSnapshot[]> {
-  const body = await request<{ snapshots: CloudSnapshot[] }>('GET', '/sync/snapshots');
-  return body.snapshots;
-}
-
-export interface CloudRestoreResult {
-  snapshot: string;
-  files: number;
-  /** Local pre-restore backup of the vault as it was — the undo path. */
-  backup_file: string;
+/** The paths currently waiting on a decision. */
+export async function listCloudConflicts(): Promise<CloudConflict[]> {
+  const body = await request<{ conflicts: CloudConflict[] }>('GET', '/sync/conflicts');
+  return body.conflicts;
 }
 
 /**
- * Replace the vault with a snapshot's contents. The server writes a local
- * backup of the current vault first, and validates/stages the archive before
- * touching anything, so a failed restore leaves the vault as it was.
+ * Both versions of one contested path, plus a merge of them.
+ *
+ * The remote side is fetched on demand rather than when the conflict was
+ * detected: a run that finds twenty conflicts shouldn't download twenty files
+ * nobody has opened yet.
  */
-export function restoreCloudSnapshot(id: string): Promise<CloudRestoreResult> {
-  return request('POST', '/sync/restore', { id });
+export function getCloudConflict(path: string): Promise<CloudConflictDetail> {
+  const encoded = path.split('/').map(encodeURIComponent).join('/');
+  return request('GET', `/sync/conflicts/${encoded}`);
+}
+
+/**
+ * Settle one conflict. `content` is required for `merge` — the merged text the
+ * user was shown and allowed to edit — and ignored otherwise.
+ *
+ * Every resolution leaves both sides holding the same bytes, merge included:
+ * fixing only one side would bring the conflict straight back.
+ */
+export function resolveCloudConflict(
+  path: string,
+  resolution: CloudResolution,
+  content?: string,
+): Promise<CloudSyncState> {
+  return request('POST', '/sync/resolve', { path, resolution, content: content ?? '' });
+}
+
+/** The local pre-sync copies of the vault, newest first. */
+export async function listCloudBackups(): Promise<CloudBackup[]> {
+  const body = await request<{ backups: CloudBackup[] }>('GET', '/sync/backups');
+  return body.backups;
+}
+
+/**
+ * Replace the vault with one of those backups — the undo button for a sync.
+ * The server takes a fresh backup of the current vault first, so restoring the
+ * wrong one is itself undoable.
+ */
+export function restoreCloudBackup(name: string): Promise<{ backup: string; files: number }> {
+  return request('POST', '/sync/backups/restore', { name });
 }
 
 /**

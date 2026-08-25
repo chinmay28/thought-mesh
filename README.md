@@ -17,18 +17,27 @@ app so every device shares one vault:
   app on a phone — no app store, no native build. Editing, autocomplete for
   `[[links]]`, search, and the graph all work one-handed.
 - **Daily notes.** The Today tab opens (or creates) `journal/YYYY-MM-DD.md`.
-- **Automatic Dropbox sync — and restore.** Point the server at a folder in
-  your Dropbox and it uploads a snapshot of the whole vault — notes, folder
-  structure, all data — hourly, daily, weekly or monthly, or on demand. Each
-  upload is a plain `.vault.zip` of markdown files, readable anywhere. And the
-  road back is one tap: pick any snapshot on the Sync tab and the server
-  restores the vault from it, saving a local backup of the current vault
-  first. The deployment registers its own OAuth app (no shipped credentials),
-  and the stored grant lives *outside* the vault so it can never leak into a
-  vault you sync by other means.
+- **Categories.** Give a note any number of categories and filter the vault by
+  them. They live in the note's own YAML frontmatter — the same place Obsidian
+  looks — so they travel with the file and are just as visible to `grep`.
+  Rename one and every note carrying it is updated.
+- **Two-way Dropbox sync.** Point the server at a folder in your Dropbox and
+  the two are kept in step, hourly, daily, weekly, monthly or on demand. The
+  folder holds your vault as an ordinary directory tree — same notes, same
+  folders, plain markdown readable anywhere — so a note edited on another
+  device comes back down, and one deleted anywhere goes away everywhere. The
+  deployment registers its own OAuth app (no shipped credentials), and the
+  stored grant lives *outside* the vault so it can never leak into a vault you
+  sync by other means.
+- **Conflicts are yours to settle.** When the same note changed in two places,
+  nothing is overwritten: both versions stay put and you choose — keep mine,
+  take theirs, or merge them. The merge combines edits to different parts of
+  the note by itself and asks only about the lines that genuinely collide. The
+  same three choices show up in the editor when a save lands on a note that
+  moved underneath it. Before a sync replaces anything locally, the server
+  zips your vault as it was — undo is a tap away on the Sync tab.
 - **One shared source of truth.** A small Go backend owns the vault; desktop
-  and mobile clients all read and write the same notes, with conflict
-  detection when two devices edit the same note.
+  and mobile clients all read and write the same notes.
 - **No accounts, no auth.** Meant to run on a trusted network (your LAN, a
   Tailscale tailnet, a VPN). Anyone who can reach the server can use it.
 

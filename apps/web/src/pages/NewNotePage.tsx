@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { createNote, listNotes, type NoteInfo } from '../api/client.ts';
+import {
+  createNote,
+  listCategories,
+  listNotes,
+  type Category,
+  type NoteInfo,
+} from '../api/client.ts';
+import { CategoryPicker } from '../components/CategoryPicker.tsx';
 
 /** Create a note: a name, an optional folder, straight into the editor. */
 export function NewNotePage() {
@@ -12,9 +19,12 @@ export function NewNotePage() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [notes, setNotes] = useState<NoteInfo[]>([]);
+  const [categories, setCategories] = useState<string[]>([]);
+  const [knownCategories, setKnownCategories] = useState<Category[]>([]);
 
   useEffect(() => {
     listNotes().then(setNotes).catch(() => {});
+    listCategories().then(setKnownCategories).catch(() => {});
   }, []);
 
   const dirs = useMemo(() => {
@@ -29,7 +39,7 @@ export function NewNotePage() {
     setBusy(true);
     setError('');
     try {
-      const note = await createNote({ name, dir, content: '' });
+      const note = await createNote({ name, dir, content: '', categories });
       navigate(`/notes/${note.path}?edit=1`, { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -70,6 +80,17 @@ export function NewNotePage() {
             ))}
           </datalist>
         </label>
+        <div className="field">
+          <span className="field__label">
+            Categories <span className="muted">(optional)</span>
+          </span>
+          <CategoryPicker
+            value={categories}
+            known={knownCategories}
+            onChange={setCategories}
+            disabled={busy}
+          />
+        </div>
         {error && <div className="banner banner--warn">{error}</div>}
         <div className="form__actions">
           <button type="submit" className="btn btn--primary" disabled={busy || !name.trim()}>
@@ -83,7 +104,14 @@ export function NewNotePage() {
       <p className="muted">
         The note becomes a markdown file in your vault
         {dir.trim() ? ` under “${dir.trim()}/”` : ''}. Link to it from any other
-        note with <code>[[{name.trim() || 'its name'}]]</code>.
+        note with <code>[[{name.trim() || 'its name'}]]</code>
+        {categories.length > 0 && (
+          <>
+            , and its categories go in the file’s own frontmatter — so they
+            travel with it
+          </>
+        )}
+        .
       </p>
     </div>
   );
