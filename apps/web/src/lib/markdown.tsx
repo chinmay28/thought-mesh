@@ -209,8 +209,46 @@ function renderList(entries: ListEntry[], opts: RenderOptions, keyBase: number):
 const HEADING_RE = /^(#{1,6})\s+(.*)$/;
 const HR_RE = /^ {0,3}(?:(?:- *){3,}|(?:\* *){3,}|(?:_ *){3,})$/;
 
-/** Render a markdown document to React elements. */
+/**
+ * Split a leading YAML frontmatter block off a note.
+ *
+ * Categories live up there (the server writes them; see internal/vault), and
+ * they are metadata, not prose — rendering the block would put a stray
+ * horizontal rule and a line of YAML at the top of every categorised note.
+ *
+ * The rule matches the server's: a block opens with `---` on the very first
+ * line and closes with `---` or `...` on a line of its own. A leading `---`
+ * with no closing fence is a horizontal rule, and stays in the body.
+ */
+export function splitFrontmatter(src: string): { frontmatter: string[]; body: string } {
+  const text = src.startsWith('\ufeff') ? src.slice(1) : src;
+  const lines = text.split('\n');
+  if (lines[0]?.trimEnd() !== '---') return { frontmatter: [], body: src };
+  for (let i = 1; i < lines.length && i <= MAX_FRONTMATTER_LINES; i++) {
+    const fence = lines[i]!.trimEnd();
+    if (fence === '---' || fence === '...') {
+      return { frontmatter: lines.slice(1, i), body: lines.slice(i + 1).join('\n') };
+    }
+  }
+  return { frontmatter: [], body: src };
+}
+
+/** How far to look for the closing fence before deciding the leading `---`
+ * was a horizontal rule after all. Mirrors the server's limit. */
+const MAX_FRONTMATTER_LINES = 200;
+
+/**
+ * Render a markdown document to React elements.
+ *
+ * Frontmatter is stripped first, and only here at the top level — the block
+ * recursion below (blockquotes) calls renderBlocks directly, so a `---` inside
+ * a quote is still the rule it looks like.
+ */
 export function renderMarkdown(src: string, opts: RenderOptions): ReactNode {
+  return renderBlocks(splitFrontmatter(src).body, opts);
+}
+
+function renderBlocks(src: string, opts: RenderOptions): ReactNode {
   const lines = src.split('\n');
   const out: ReactNode[] = [];
   let i = 0;
@@ -268,7 +306,7 @@ export function renderMarkdown(src: string, opts: RenderOptions): ReactNode {
         buf.push(lines[i]!.trim().replace(/^> ?/, ''));
         i++;
       }
-      out.push(<blockquote key={key++}>{renderMarkdown(buf.join('\n'), opts)}</blockquote>);
+      out.push(<blockquote key={key++}>{renderBlocks(buf.join('\n'), opts)}</blockquote>);
       continue;
     }
 

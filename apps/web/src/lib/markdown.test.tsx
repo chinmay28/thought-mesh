@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { renderMarkdown, wikiLabel, wikiTarget, type RenderOptions } from './markdown.tsx';
+import {
+  renderMarkdown,
+  splitFrontmatter,
+  wikiLabel,
+  wikiTarget,
+  type RenderOptions,
+} from './markdown.tsx';
 
 const opts: RenderOptions = {
   resolve: (target) => (target.toLowerCase() === 'known' ? 'dir/Known.md' : null),
@@ -97,5 +103,39 @@ describe('renderMarkdown', () => {
     const a = screen.getByRole('link', { name: 'docs' });
     expect(a).toHaveAttribute('href', 'https://example.com');
     expect(a).toHaveAttribute('rel', 'noreferrer');
+  });
+});
+
+describe('frontmatter', () => {
+  it('splits a leading YAML block off the body', () => {
+    const { frontmatter, body } = splitFrontmatter('---\ncategories: [Ideas]\n---\n\n# Title\n');
+    expect(frontmatter).toEqual(['categories: [Ideas]']);
+    expect(body).toBe('\n# Title\n');
+  });
+
+  it('leaves a lone --- alone: with no closing fence it is a horizontal rule', () => {
+    const src = '---\njust a rule above\n';
+    expect(splitFrontmatter(src).body).toBe(src);
+    expect(splitFrontmatter(src).frontmatter).toEqual([]);
+  });
+
+  it('accepts the "..." closing fence YAML also allows', () => {
+    expect(splitFrontmatter('---\na: 1\n...\nbody\n').body).toBe('body\n');
+  });
+
+  // Categories are metadata, not prose: rendering the block would put a stray
+  // rule and a line of YAML at the top of every categorised note.
+  it('is not rendered as content', () => {
+    const { container } = md('---\ncategories: [Ideas, Work]\n---\n\n# Real title\n');
+    expect(container.textContent).not.toContain('categories');
+    expect(container.querySelector('h1')?.textContent).toBe('Real title');
+    expect(container.querySelector('hr')).toBeNull();
+  });
+
+  // …but only at the top level. A `---` inside a blockquote is the rule it
+  // looks like.
+  it('does not strip a rule nested in a blockquote', () => {
+    const { container } = md('> above\n>\n> ---\n>\n> below\n');
+    expect(container.querySelector('blockquote hr')).not.toBeNull();
   });
 });

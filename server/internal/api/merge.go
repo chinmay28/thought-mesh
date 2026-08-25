@@ -50,8 +50,9 @@ func (s *server) mergeText(w http.ResponseWriter, r *http.Request) {
 // endpoint takes its input straight from a request body.
 const maxMergeBytes = 4 << 20 // 4 MiB
 
-// mergeJSON is the wire shape of a merge result, shared with cloud sync's
-// conflict detail so the client renders both the same way.
+// mergeJSONBody is the wire shape of a merge result. It deliberately mirrors
+// the `merged`/`merge_conflicts` pair cloud sync's conflict detail carries, so
+// the client can render an editor conflict and a sync conflict the same way.
 type mergeJSONBody struct {
 	Merged string `json:"merged"`
 	// Conflicts is how many regions both sides rewrote; 0 means the merge came

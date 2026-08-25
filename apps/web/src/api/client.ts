@@ -15,6 +15,20 @@ export interface NoteInfo {
   dir: string; // parent folder, "" at the vault root
   size: number;
   mtime_ms: number;
+  /**
+   * The note's categories, in the order it lists them. Always an array —
+   * a note with none is the ordinary case, not a missing value.
+   *
+   * They live in the note's own YAML frontmatter on the server, which is why
+   * changing them changes `content` and `mtime_ms` too.
+   */
+  categories: string[];
+}
+
+/** One category in the vault's vocabulary, with how many notes use it. */
+export interface Category {
+  name: string;
+  count: number;
 }
 
 export interface NoteLink {
@@ -136,8 +150,11 @@ export function health(): Promise<Health> {
   return request('GET', '/api/health');
 }
 
-export async function listNotes(): Promise<NoteInfo[]> {
-  const body = await request<{ notes: NoteInfo[] }>('GET', '/api/notes');
+/** Every note, newest-agnostic (the server sorts by path). `category`
+ * narrows the list to the notes carrying it, matched case-insensitively. */
+export async function listNotes(category?: string): Promise<NoteInfo[]> {
+  const query = category ? `?category=${encodeURIComponent(category)}` : '';
+  const body = await request<{ notes: NoteInfo[] }>('GET', `/api/notes${query}`);
   return body.notes;
 }
 
@@ -150,12 +167,14 @@ export function createNote(input: {
   name?: string;
   dir?: string;
   content?: string;
+  categories?: string[];
 }): Promise<Note> {
   return request('POST', '/api/notes', {
     path: input.path ?? '',
     name: input.name ?? '',
     dir: input.dir ?? '',
     content: input.content ?? '',
+    categories: input.categories ?? [],
   });
 }
 
@@ -191,4 +210,78 @@ export async function search(q: string): Promise<SearchResult[]> {
 
 export function graph(): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> {
   return request('GET', '/api/graph');
+}
+
+// ---------------------------------------------------------------------------
+// Categories
+//
+// There is no "create a category" call, deliberately: a category exists as
+// long as some note declares it in its frontmatter, so assigning one to a note
+// is the only way to make one, and unassigning the last is the only way to lose
+// one. The vault-wide rename and delete exist because a name means the same
+// thing everywhere — leaving half the notes on the old spelling would silently
+// split one category into two.
+// ---------------------------------------------------------------------------
+
+/** Every category in the vault, sorted by name, with note counts. */
+export async function listCategories(): Promise<Category[]> {
+  const body = await request<{ categories: Category[] }>('GET', '/api/categories');
+  return body.categories;
+}
+
+/**
+ * Replace one note's categories. Pass baseMtimeMs (the mtime_ms the screen was
+ * showing) to get a 409 instead of quietly reverting an edit made elsewhere.
+ */
+export function setNoteCategories(
+  path: string,
+  categories: string[],
+  baseMtimeMs?: number,
+): Promise<Note> {
+  const body: { path: string; categories: string[]; base_mtime_ms?: number } = {
+    path,
+    categories,
+  };
+  if (baseMtimeMs !== undefined) body.base_mtime_ms = baseMtimeMs;
+  return request('POST', '/api/categories/assign', body);
+}
+
+/** Rename a category everywhere. Renaming onto an existing name merges them. */
+export function renameCategory(
+  from: string,
+  to: string,
+): Promise<{ categories: Category[]; updated_notes: number }> {
+  return request('POST', '/api/categories/rename', { from, to });
+}
+
+/** Strip a category from every note carrying it. The notes are left alone. */
+export function deleteCategory(
+  name: string,
+): Promise<{ categories: Category[]; updated_notes: number }> {
+  return request('POST', '/api/categories/delete', { name });
+}
+
+// ---------------------------------------------------------------------------
+// Merge
+// ---------------------------------------------------------------------------
+
+export interface MergeResult {
+  merged: string;
+  /** Regions both sides rewrote; 0 means the merge can be saved as-is. */
+  conflicts: number;
+}
+
+/**
+ * Combine two versions of a note that both descend from `base`.
+ *
+ * The server owns the algorithm (the same one cloud sync uses to settle its
+ * conflicts), but only the browser still holds the version the edit started
+ * from — so the three texts travel there and the merged draft comes back.
+ * Omit `base` when there isn't one; the merge then reconciles the shared
+ * prefix and suffix and hands the middle over marked.
+ */
+export function mergeText(mine: string, theirs: string, base?: string): Promise<MergeResult> {
+  const body: { mine: string; theirs: string; base?: string } = { mine, theirs };
+  if (base !== undefined) body.base = base;
+  return request('POST', '/api/merge', body);
 }

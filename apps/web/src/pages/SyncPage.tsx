@@ -5,18 +5,24 @@ import {
   completeCloudConnect,
   disconnectCloudSync,
   fetchCloudSync,
+  getCloudConflict,
+  listCloudBackups,
   listCloudFolders,
-  listCloudSnapshots,
-  restoreCloudSnapshot,
+  resolveCloudConflict,
+  restoreCloudBackup,
   runCloudSync,
   setProviderCredentials,
   startCloudConnect,
   updateCloudSync,
+  type CloudBackup,
+  type CloudConflict,
+  type CloudConflictDetail,
   type CloudConnectStart,
   type CloudFolder,
   type CloudProviderInfo,
-  type CloudSnapshot,
+  type CloudResolution,
   type CloudSyncFrequency,
+  type CloudSyncResult,
   type CloudSyncState,
 } from '../api/cloud.ts';
 import { formatDateTime } from '../lib/time.ts';
@@ -29,12 +35,17 @@ interface Crumb {
 }
 
 /**
- * Automatic sync of the vault to a cloud folder.
+ * Two-way sync of the vault with a cloud folder.
  *
- * Three things have to be true before anything is uploaded: an account is
- * connected, a folder is chosen inside it, and the frequency isn't "off".
- * The page is laid out in that order, and each step only appears once the
- * one before it is done — the alternative is a screen of dead controls.
+ * Three things have to be true before anything moves: an account is connected,
+ * a folder is chosen inside it, and the frequency isn't "off". The page is laid
+ * out in that order, and each step only appears once the one before it is done
+ * — the alternative is a screen of dead controls.
+ *
+ * The one thing that jumps the queue is a conflict. Everything else here is a
+ * setting that can wait; an unresolved conflict is a note whose two versions
+ * are both sitting there un-synced until somebody chooses, so it goes above the
+ * controls whenever there is one.
  *
  * The server does the actual work; this is a settings surface over
  * `/api/cloud/sync`. On a server built without cloud support those routes
@@ -49,6 +60,8 @@ export function SyncPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
   const [restoring, setRestoring] = useState(false);
+  // The conflict whose two versions are open for comparison, if any.
+  const [openConflict, setOpenConflict] = useState<string | null>(null);
   const [setupFor, setSetupFor] = useState<string | null>(null);
   // A paste-mode authorization in progress: the user is off at the provider,
   // and we're waiting for the code they'll bring back. The provider id rides
@@ -150,7 +163,8 @@ export function SyncPage() {
     if (
       !window.confirm(
         'Disconnect this cloud account? Scheduled sync stops and the stored ' +
-          'access is deleted. Snapshots already uploaded are left alone.',
+          'access is deleted. The files already in the cloud folder are left ' +
+          'exactly as they are, and so is your vault.',
       )
     ) {
       return;
@@ -172,37 +186,51 @@ export function SyncPage() {
     return run('folder', async () => {
       setState(await updateCloudSync({ folder_id: folder.id, folder_path: folder.path }));
       setPicking(false);
-      setMessage(`Vault snapshots will be saved to ${folder.path}.`);
+      setMessage(
+        `Your vault and ${folder.path} will be kept in step. The first sync ` +
+          `merges what's in both: nothing on either side is deleted for being new.`,
+      );
     });
   }
 
   function syncNow() {
     return run('run', async () => {
-      const result = await runCloudSync();
-      setState((prev) => (prev ? { ...prev, settings: result.settings } : prev));
-      setMessage(`Uploaded ${result.file_name}.`);
+      const { result, settings } = await runCloudSync();
+      setState((prev) =>
+        prev ? { ...prev, settings, conflicts: result.conflicts } : prev,
+      );
+      setMessage(describeRun(result));
     });
   }
 
-  function restoreSnapshot(snap: CloudSnapshot) {
+  function resolve(path: string, resolution: CloudResolution, content?: string) {
+    return run(`resolve:${path}`, async () => {
+      setState(await resolveCloudConflict(path, resolution, content));
+      setOpenConflict(null);
+      setMessage(`${path} settled — ${RESOLUTION_LABELS[resolution]}.`);
+    });
+  }
+
+  function restoreBackup(backup: CloudBackup) {
     // The one destructive action on this page, so the confirm spells out
     // both what happens and the undo path.
     if (
       !window.confirm(
-        `Restore "${snap.name}"?\n\nThis replaces every note in the vault with ` +
-          `the snapshot's contents. A local backup of the vault as it is right ` +
-          `now is saved on the server first, so this can be undone.`,
+        `Restore "${backup.name}"?\n\nThis replaces every note in the vault with ` +
+          `the backup's contents. A fresh backup of the vault as it is right now ` +
+          `is saved on the server first, so this can itself be undone.`,
       )
     ) {
       return;
     }
-    return run(`restore:${snap.id}`, async () => {
-      const result = await restoreCloudSnapshot(snap.id);
+    return run(`restore:${backup.name}`, async () => {
+      const result = await restoreCloudBackup(backup.name);
       setRestoring(false);
+      await load();
       setMessage(
         `Restored ${result.files} file${result.files === 1 ? '' : 's'} from ` +
-          `${result.snapshot}. The previous vault was saved on the server as ` +
-          `${result.backup_file}.`,
+          `${result.backup}. The next sync will work out what the cloud folder ` +
+          `now needs.`,
       );
     });
   }
@@ -232,10 +260,12 @@ export function SyncPage() {
     <div className="page page--narrow">
       <h1 className="page-title">Sync</h1>
       <p className="muted">
-        Have the server zip your whole vault — every note, folders and all —
-        and save it to a folder in your Dropbox on a schedule. Each upload is a
-        plain <code>.vault.zip</code> of markdown files, so it's readable
-        anywhere, with or without Thought Mesh.
+        Keep your vault and a folder in your Dropbox in step. The folder holds
+        the same notes in the same folders under the same names — plain markdown
+        files, readable with or without Thought Mesh — so a note edited on
+        another device comes back down, and one deleted anywhere goes away
+        everywhere. When the same note changed in both places, nothing is
+        overwritten: you’re asked which version wins.
       </p>
 
       {!connected ? (
@@ -385,6 +415,19 @@ export function SyncPage() {
         </div>
       ) : (
         <div className="cloud">
+          {/* Above everything else, because it's the only thing here that is
+              actively not in step until someone acts on it. */}
+          {state.conflicts.length > 0 && (
+            <ConflictSection
+              conflicts={state.conflicts}
+              openPath={openConflict}
+              busy={busy}
+              onOpen={setOpenConflict}
+              onResolve={(path, resolution, content) => void resolve(path, resolution, content)}
+              onError={setError}
+            />
+          )}
+
           <div className="cloud__account">
             <div>
               <span className="cloud__account-name">
@@ -448,28 +491,27 @@ export function SyncPage() {
               disabled={busy !== null || settings.folder_id === null}
               onClick={() => void syncNow()}
             >
-              {busy === 'run' ? 'Uploading…' : 'Sync now'}
+              {busy === 'run' ? 'Syncing…' : 'Sync now'}
             </button>
           </div>
 
           <CloudStatus settings={settings} />
 
-          {/* Restore lives below the upload controls: it's the rarer, heavier
-              action, and the snapshot list costs a provider round trip — so
-              it only loads when asked for. */}
+          {/* The undo path, below the sync controls: rarer, heavier, and only
+              interesting after a sync brought down something unwelcome. */}
           <div className="cloud__restore">
             <button
               type="button"
               className="btn"
-              disabled={busy !== null || settings.folder_id === null}
+              disabled={busy !== null}
               onClick={() => setRestoring((open) => !open)}
             >
-              {restoring ? 'Hide snapshots' : 'Restore from a snapshot…'}
+              {restoring ? 'Hide backups' : 'Undo a sync…'}
             </button>
             {restoring && (
-              <RestorePanel
+              <BackupPanel
                 busy={busy}
-                onRestore={(snap) => void restoreSnapshot(snap)}
+                onRestore={(backup) => void restoreBackup(backup)}
                 onError={setError}
               />
             )}
@@ -691,6 +733,7 @@ function providerName(providers: CloudProviderInfo[], id: string | null): string
 /** When the last sync happened, how it went, and when the next one is due. */
 function CloudStatus({ settings }: { settings: CloudSyncState['settings'] }) {
   const failed = settings.last_status === 'error';
+  const summary = settings.last_result;
   return (
     <div className="cloud__status" role="status">
       {settings.last_run_at ? (
@@ -700,7 +743,7 @@ function CloudStatus({ settings }: { settings: CloudSyncState['settings'] }) {
                 settings.last_error ?? 'unknown error'
               }`
             : `Last sync ${formatDateTime(settings.last_run_at)}${
-                settings.last_file_name ? ` — ${settings.last_file_name}` : ''
+                summary ? ` — ${describeSummary(summary)}` : ''
               }`}
         </p>
       ) : (
@@ -713,6 +756,49 @@ function CloudStatus({ settings }: { settings: CloudSyncState['settings'] }) {
   );
 }
 
+/**
+ * What a run did, in a sentence.
+ *
+ * "Everything was already in step" is the healthy outcome on a schedule and
+ * deserves saying plainly — a bare "0 uploaded, 0 downloaded" reads like a
+ * failure, which is exactly what it isn't.
+ */
+function describeSummary(summary: {
+  uploaded: number;
+  downloaded: number;
+  deleted_local: number;
+  deleted_remote: number;
+  conflicts: number;
+  failed: number;
+}): string {
+  const parts: string[] = [];
+  if (summary.uploaded > 0) parts.push(`${summary.uploaded} up`);
+  if (summary.downloaded > 0) parts.push(`${summary.downloaded} down`);
+  const deleted = summary.deleted_local + summary.deleted_remote;
+  if (deleted > 0) parts.push(`${deleted} deleted`);
+  if (summary.failed > 0) parts.push(`${summary.failed} failed`);
+  if (summary.conflicts > 0) {
+    parts.push(`${summary.conflicts} needing a decision`);
+  }
+  return parts.length === 0 ? 'everything was already in step' : parts.join(', ');
+}
+
+function describeRun(result: CloudSyncResult): string {
+  const summary = describeSummary({ ...result, conflicts: result.conflicts.length });
+  const backup =
+    result.backup_file === ''
+      ? ''
+      : ` A copy of the vault as it was is saved on the server as ${result.backup_file}.`;
+  return `Synced — ${summary}.${backup}`;
+}
+
+/** What each resolution did, for the confirmation line. */
+const RESOLUTION_LABELS: Record<CloudResolution, string> = {
+  keep_local: 'this server’s version now wins everywhere',
+  keep_remote: 'the cloud’s version now wins everywhere',
+  merge: 'the merged version is now on both sides',
+};
+
 /** A file size the way people read them. */
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -721,30 +807,35 @@ function formatSize(bytes: number): string {
 }
 
 /**
- * The snapshots in the connected folder, newest first, each one tap (plus a
- * spelled-out confirm) from becoming the vault again.
+ * The local pre-sync copies of the vault, newest first.
+ *
+ * The server writes one whenever a sync is about to overwrite or delete
+ * something in the vault, which makes this the undo button for "the cloud sent
+ * down something I didn't want". They live beside the settings file on the
+ * server, never inside the vault — a backup swept into the next sync would
+ * upload the vault into itself.
  */
-function RestorePanel({
+function BackupPanel({
   busy,
   onRestore,
   onError,
 }: {
   busy: string | null;
-  onRestore: (snap: CloudSnapshot) => void;
+  onRestore: (backup: CloudBackup) => void;
   onError: (message: string) => void;
 }) {
-  const [snapshots, setSnapshots] = useState<CloudSnapshot[] | null>(null);
+  const [backups, setBackups] = useState<CloudBackup[] | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    listCloudSnapshots().then(
+    listCloudBackups().then(
       (next) => {
-        if (!cancelled) setSnapshots(next);
+        if (!cancelled) setBackups(next);
       },
       (err: unknown) => {
         if (cancelled) return;
         onError(err instanceof Error ? err.message : String(err));
-        setSnapshots([]);
+        setBackups([]);
       },
     );
     return () => {
@@ -754,19 +845,19 @@ function RestorePanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (snapshots === null) {
+  if (backups === null) {
     return (
       <div className="cloud__picker">
-        <p className="muted">Looking for snapshots…</p>
+        <p className="muted">Looking for backups…</p>
       </div>
     );
   }
-  if (snapshots.length === 0) {
+  if (backups.length === 0) {
     return (
       <div className="cloud__picker">
         <p className="muted">
-          No snapshots in the chosen folder yet — “Sync now” creates the first
-          one.
+          No backups yet. The server writes one automatically whenever a sync is
+          about to replace or delete a note in your vault.
         </p>
       </div>
     );
@@ -774,30 +865,251 @@ function RestorePanel({
   return (
     <div className="cloud__picker">
       <ul className="cloud__snapshots">
-        {snapshots.map((snap) => (
-          <li key={snap.id} className="cloud__snapshot">
+        {backups.map((backup) => (
+          <li key={backup.name} className="cloud__snapshot">
             <div className="cloud__snapshot-meta">
-              <span className="cloud__snapshot-name">{snap.name}</span>
+              <span className="cloud__snapshot-name">{backup.name}</span>
               <span className="muted">
-                {formatSize(snap.size)}
-                {snap.modified_ms > 0 && <> · {formatDateTime(new Date(snap.modified_ms).toISOString())}</>}
+                {formatSize(backup.size)}
+                {backup.modified_ms > 0 && (
+                  <> · {formatDateTime(new Date(backup.modified_ms).toISOString())}</>
+                )}
               </span>
             </div>
             <button
               type="button"
               className="btn btn--small"
               disabled={busy !== null}
-              onClick={() => onRestore(snap)}
+              onClick={() => onRestore(backup)}
             >
-              {busy === `restore:${snap.id}` ? 'Restoring…' : 'Restore'}
+              {busy === `restore:${backup.name}` ? 'Restoring…' : 'Restore'}
             </button>
           </li>
         ))}
       </ul>
       <p className="muted cloud__restore-note">
-        Restoring replaces the vault with the snapshot; the server keeps a
-        local backup of the current vault first.
+        Restoring replaces the vault with the backup; a fresh backup of the
+        current vault is taken first. Each one is a plain zip, so unzipping it by
+        hand works too.
       </p>
+    </div>
+  );
+}
+
+/**
+ * The notes both sides changed, waiting on a decision.
+ *
+ * Listed rather than modal: a conflict is not urgent enough to block the page,
+ * and several at once is ordinary after a week away from one device. Opening
+ * one loads both versions — that costs a download, so it happens on demand.
+ */
+function ConflictSection({
+  conflicts,
+  openPath,
+  busy,
+  onOpen,
+  onResolve,
+  onError,
+}: {
+  conflicts: CloudConflict[];
+  openPath: string | null;
+  busy: string | null;
+  onOpen: (path: string | null) => void;
+  onResolve: (path: string, resolution: CloudResolution, content?: string) => void;
+  onError: (message: string) => void;
+}) {
+  return (
+    <section className="cloud__conflicts" aria-label="Sync conflicts">
+      <h2 className="section-title">
+        {conflicts.length} {conflicts.length === 1 ? 'note needs' : 'notes need'} a decision
+      </h2>
+      <p className="muted">
+        These changed here <em>and</em> in the cloud since they last agreed.
+        Nothing has been overwritten — both versions are exactly where they were,
+        and syncing skips them until you choose.
+      </p>
+      <ul className="cloud__conflict-list">
+        {conflicts.map((conflict) => (
+          <li key={conflict.path} className="cloud__conflict">
+            <div className="cloud__conflict-row">
+              <div className="cloud__conflict-meta">
+                <span className="cloud__conflict-path">{conflict.path}</span>
+                <span className="muted">{describeConflict(conflict)}</span>
+              </div>
+              <button
+                type="button"
+                className="btn btn--small"
+                disabled={busy !== null}
+                onClick={() => onOpen(openPath === conflict.path ? null : conflict.path)}
+              >
+                {openPath === conflict.path ? 'Close' : 'Compare'}
+              </button>
+            </div>
+            {openPath === conflict.path && (
+              <ConflictResolver
+                conflict={conflict}
+                busy={busy}
+                onResolve={onResolve}
+                onError={onError}
+              />
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** What kind of collision this is, in the fewest words that stay honest. */
+function describeConflict(conflict: CloudConflict): string {
+  if (conflict.local_missing === 1) return 'deleted here, edited in the cloud';
+  if (conflict.remote_missing === 1) return 'edited here, deleted in the cloud';
+  if (conflict.mergeable === 0) return 'changed on both sides — not text, so it can’t be merged';
+  return 'changed on both sides';
+}
+
+/**
+ * One conflict, open: both versions side by side and the three ways out.
+ *
+ * The merge is computed by the server the moment this opens, and lands in an
+ * editable box rather than being applied. Anything the merge could settle on
+ * its own already is; what's left is marked, and the person who wrote both
+ * halves is the only one who can say which stays.
+ */
+function ConflictResolver({
+  conflict,
+  busy,
+  onResolve,
+  onError,
+}: {
+  conflict: CloudConflict;
+  busy: string | null;
+  onResolve: (path: string, resolution: CloudResolution, content?: string) => void;
+  onError: (message: string) => void;
+}) {
+  const [detail, setDetail] = useState<CloudConflictDetail | null>(null);
+  const [merged, setMerged] = useState('');
+  const [showMerge, setShowMerge] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    getCloudConflict(conflict.path).then(
+      (next) => {
+        if (cancelled) return;
+        setDetail(next);
+        setMerged(next.merged);
+      },
+      (err: unknown) => {
+        if (cancelled) return;
+        onError(err instanceof Error ? err.message : String(err));
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conflict.path]);
+
+  const working = busy === `resolve:${conflict.path}`;
+  const canMerge = conflict.mergeable === 1 && detail !== null && detail.mergeable === 1;
+
+  return (
+    <div className="cloud__panel cloud__resolver">
+      {detail === null ? (
+        <p className="muted">Loading both versions…</p>
+      ) : (
+        <>
+          {canMerge && (
+            <div className="cloud__versions">
+              <ConflictVersion title="Here (this server)" text={detail.local} />
+              <ConflictVersion title="In the cloud" text={detail.remote} />
+            </div>
+          )}
+
+          {canMerge && showMerge && (
+            <label className="field">
+              <span className="field__label">
+                Merged{' '}
+                {detail.merge_conflicts > 0 ? (
+                  <span className="muted">
+                    — {detail.merge_conflicts}{' '}
+                    {detail.merge_conflicts === 1 ? 'region' : 'regions'} both sides rewrote,
+                    marked below. Delete the half you don’t want.
+                  </span>
+                ) : (
+                  <span className="muted">— nothing collided; this is ready to save.</span>
+                )}
+              </span>
+              <textarea
+                className="field__input cloud__merge-text"
+                value={merged}
+                onChange={(e) => setMerged(e.target.value)}
+                rows={12}
+                spellCheck={false}
+              />
+              {detail.has_base === 0 && (
+                <span className="muted">
+                  The version these two grew apart from isn’t available, so the
+                  merge could only keep what they still have in common.
+                </span>
+              )}
+            </label>
+          )}
+
+          <div className="form__actions cloud__resolutions">
+            <button
+              type="button"
+              className="btn"
+              disabled={busy !== null}
+              onClick={() => onResolve(conflict.path, 'keep_local')}
+            >
+              {conflict.local_missing === 1 ? 'Keep it deleted' : 'Keep mine'}
+            </button>
+            <button
+              type="button"
+              className="btn"
+              disabled={busy !== null}
+              onClick={() => onResolve(conflict.path, 'keep_remote')}
+            >
+              {conflict.remote_missing === 1 ? 'Delete it here too' : 'Use the cloud’s'}
+            </button>
+            {canMerge &&
+              (showMerge ? (
+                <button
+                  type="button"
+                  className="btn btn--primary"
+                  disabled={busy !== null}
+                  onClick={() => onResolve(conflict.path, 'merge', merged)}
+                >
+                  {working ? 'Saving…' : 'Save merged version'}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn--primary"
+                  disabled={busy !== null}
+                  onClick={() => setShowMerge(true)}
+                >
+                  Merge them
+                </button>
+              ))}
+          </div>
+          <p className="muted">
+            Whichever you pick, both sides end up holding it — the note stops
+            being a conflict rather than becoming one again next run.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** One version of a contested note, shown read-only for comparison. */
+function ConflictVersion({ title, text }: { title: string; text: string }) {
+  return (
+    <div className="cloud__version">
+      <h3 className="cloud__version-title">{title}</h3>
+      <pre className="cloud__version-text">{text === '' ? '(empty)' : text}</pre>
     </div>
   );
 }

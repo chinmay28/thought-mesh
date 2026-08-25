@@ -12,6 +12,39 @@ pushed tag as that release's body — keep the format:
 
 ## Unreleased
 
+- Notes can carry **categories**. Give a note any number of them from the note
+  screen or the new-note form, and filter the vault by one from the home page
+  (the filter lives in the URL, so it's a place you can link to and go back
+  to). They are stored in the note's own YAML frontmatter — the same place
+  Obsidian looks — so a category travels with the file, shows up in `grep`, and
+  survives the note leaving Thought Mesh entirely. There is no registry and no
+  "create a category" step: a category exists as long as some note claims it.
+  Renaming one rewrites every note that carries it, the way renaming a note
+  already rewrites its wikilinks; renaming onto a name already in use merges
+  the two. Frontmatter written by other tools is copied through untouched.
+- **Dropbox sync is now a real two-way sync.** The chosen folder holds your
+  vault as an ordinary directory tree — same notes, same folders, same names —
+  instead of a pile of periodic `.vault.zip` snapshots. Notes edited on another
+  device come back down, deletions propagate in both directions, and each run
+  reports what it moved. The server remembers what both sides held when they
+  last agreed (outside the vault, beside the settings file), which is what lets
+  it tell "edited here" from "edited there" from "deleted" rather than
+  restoring notes you meant to remove.
+- **Conflicts are yours to settle.** When the same note changed in both places,
+  neither version is touched: the path is parked, the rest of the tree syncs,
+  and the Sync page shows both versions with three ways out — keep mine, use
+  the cloud's, or merge. The merge is a three-way one against the version they
+  diverged from: edits to different parts of a note combine by themselves, and
+  only the lines both sides rewrote come back marked for you to settle, in a
+  box you can edit before saving. Whichever you pick, both sides end up holding
+  it. The same three choices now appear in the editor when a save lands on a
+  note that moved underneath it — previously it was load-theirs or keep-mine.
+- Before any sync that would replace or delete a note in your vault, the server
+  zips the vault as it was. "Undo a sync" on the Sync tab puts one back; the
+  five most recent are kept. They live beside the settings file, never inside
+  the vault.
+- Frontmatter is no longer rendered as note content — a categorised note used
+  to open with a stray horizontal rule and a line of YAML above its title.
 - The home page opens on a composer: type a note and save it, without a form
   or a name field in the way. The first line becomes the file name (markdown
   stripped, links reduced to the words they show); a name already in the
