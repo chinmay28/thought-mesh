@@ -1379,6 +1379,128 @@ a.chip__label:hover {
   flex-wrap: wrap;
 }
 
+/* ------------------------------------------------------------------
+ * Version history
+ *
+ * A list of moments, each one openable. Deliberately quiet: history is
+ * something you go looking for, not something that should compete with the
+ * note you came to read.
+ * ------------------------------------------------------------------ */
+.note-history {
+  margin-bottom: 1rem;
+}
+.cloud__history {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border);
+}
+.cloud__checkpoint {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.cloud__checkpoint .field__input {
+  flex: 1;
+  min-width: 12rem;
+}
+.cloud__note {
+  margin-top: -0.25rem;
+}
+
+.history__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.history__entry {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+.history__row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding-right: 0.6rem;
+}
+/* The whole row opens the version — a date is a small target on a phone. */
+.history__open {
+  font: inherit;
+  text-align: left;
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0.55rem 0.7rem;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.history__open--static {
+  cursor: default;
+}
+.history__when {
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+.history__kind {
+  font-size: 0.7rem;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 0.4rem;
+  flex: none;
+  white-space: nowrap;
+}
+.history__subject,
+.history__note {
+  font-size: 0.8rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+/* Whatever the writer typed to mark the moment: the one part of an entry
+   worth reading months later, so it is the part that isn't grey. */
+.history__note {
+  color: var(--text);
+  font-style: italic;
+}
+.history__version {
+  border-top: 1px solid var(--border);
+  padding: 0.6rem 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  align-items: flex-start;
+}
+.history__text {
+  margin: 0;
+  width: 100%;
+  max-height: 18rem;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--code-bg);
+  border-radius: var(--radius);
+  padding: 0.6rem 0.7rem;
+}
+
 /* ------------------------------------------------------------------ *
  * Notched devices: keep the shell out from under the system UI
  *

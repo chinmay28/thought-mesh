@@ -12,6 +12,31 @@ pushed tag as that release's body — keep the format:
 
 ## Unreleased
 
+- **Your vault is now a git repository, and every version of every note is
+  kept.** The server commits it a couple of minutes after you stop writing, and
+  around every sync — so a note can show you what it said last week and put
+  that version back, and the whole vault can be rolled back to any recorded
+  point. Nothing is ever rewritten: a rollback is itself recorded as a new
+  version, so it can be undone the same way, and `git log` in your vault reads
+  the lot without Thought Mesh in the loop. Commit messages carry the time and
+  what moved; a manual sync can carry a note of your own ("before the trip"),
+  which is the only thing that will tell one of them apart six months later.
+  You can also mark a moment deliberately from the Sync tab.
+
+  It needs `git` on the server. Without it the startup log says so and
+  everything else works as before — cloud sync keeps writing zip backups
+  instead. `--history=off` (or `THOUGHTMESH_HISTORY=off`) turns it off.
+  A vault that is already your own git repository is used as it is: its history
+  isn't restarted and its `.gitignore` isn't touched.
+
+  The repository stays on the server — `.git` is hidden, so cloud sync already
+  skips it. Syncing a `.git` directory through a file-sync service is a known
+  way to corrupt one, and with one server owning the vault there is nothing to
+  gain by it.
+- Where there is a history, cloud sync no longer writes a zip of the vault
+  before a run that would replace notes locally: the commit it takes instead is
+  the same safety copy and a better one — incremental, diffable, and per-note
+  rather than all-or-nothing. The zips remain on servers without git.
 - Notes can carry **categories**. Give a note any number of them from the note
   screen or the new-note form, and filter the vault by one from the home page
   (the filter lives in the URL, so it's a place you can link to and go back

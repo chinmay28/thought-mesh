@@ -19,7 +19,7 @@ func newServer(t *testing.T) http.Handler {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	return New(v, mesh.New(v), nil)
+	return New(v, mesh.New(v), nil, nil)
 }
 
 func do(t *testing.T, h http.Handler, method, path, body string) *httptest.ResponseRecorder {

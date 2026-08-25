@@ -24,6 +24,7 @@ import (
 
 	"github.com/chinmay28/thought-mesh/server/internal/api"
 	"github.com/chinmay28/thought-mesh/server/internal/cloud"
+	"github.com/chinmay28/thought-mesh/server/internal/history"
 	"github.com/chinmay28/thought-mesh/server/internal/mesh"
 	"github.com/chinmay28/thought-mesh/server/internal/vault"
 )
@@ -84,6 +85,10 @@ type config struct {
 	cloudSettings string
 	dropbox       cloud.Credentials
 	publicURL     string
+	// Version history: "auto" keeps the vault as a git repository (initializing
+	// one if it isn't already), "off" leaves the folder alone. Auto degrades to
+	// off by itself where git isn't installed.
+	history string
 }
 
 func serve(args []string) error {
@@ -117,6 +122,9 @@ func serve(args []string) error {
 	fset.StringVar(&cfg.publicURL, "public-url", os.Getenv("THOUGHTMESH_PUBLIC_URL"),
 		"origin this server is reached at, used to build the OAuth redirect URI "+
 			"(env THOUGHTMESH_PUBLIC_URL; default: the request's own origin)")
+	fset.StringVar(&cfg.history, "history", envOr("THOUGHTMESH_HISTORY", "auto"),
+		"vault version history: auto (keep the vault as a git repository) or off "+
+			"(env THOUGHTMESH_HISTORY)")
 	fset.BoolVar(&showVersion, "version", false, "print version and exit")
 
 	if err := fset.Parse(args); err != nil {
@@ -139,6 +147,18 @@ func run(cfg config) error {
 	}
 	m := mesh.New(v)
 
+	// Version history is the vault kept as an ordinary git repository, in the
+	// vault itself. `.git` is hidden, so every vault walk and the cloud sync
+	// listing already skip it — history stays on this server and never rides
+	// along to Dropbox, where a synced .git is a known way to corrupt one.
+	hist, err := openHistory(cfg.history, v.Root)
+	if err != nil {
+		return fmt.Errorf("open vault history: %w", err)
+	}
+	historyWatcher := &history.Watcher{Repo: hist, Log: log.Default()}
+	historyWatcher.Start(context.Background())
+	logHistory(cfg.history, hist)
+
 	// Cloud sync settings live OUTSIDE the vault, deliberately: the file
 	// holds OAuth tokens, and the vault is exactly what users copy, sync and
 	// version by other means — a token that rode along in it would leak with
@@ -153,6 +173,7 @@ func run(cfg config) error {
 		cloud.NewStore(settingsPath),
 		cloud.NewStateStore(settingsPath),
 		v,
+		hist,
 		cloud.NewRegistry(cfg.dropbox, nil, time.Now),
 		nil, cfg.publicURL)
 	// The scheduler is a background poller over the settings file, so it
@@ -163,13 +184,38 @@ func run(cfg config) error {
 	scheduler.Start(context.Background())
 	logCloudProviders(cloudSvc)
 
-	apiHandler := api.New(v, m, cloudSvc)
+	apiHandler := api.New(v, m, cloudSvc, hist)
 	handler := withWebClient(apiHandler, cfg.webDist)
 
 	addr := net.JoinHostPort(cfg.host, cfg.port)
 	log.Printf("[thoughtmesh] %s listening on http://%s:%s (vault: %s)",
 		api.AppVersion, cfg.host, cfg.port, v.Root)
 	return http.ListenAndServe(addr, handler)
+}
+
+// openHistory resolves the --history setting. "off" is a working choice, not a
+// failure: a *history.Repo that reports unavailable makes every call a no-op,
+// so nothing downstream branches on it.
+func openHistory(mode, root string) (*history.Repo, error) {
+	if strings.EqualFold(strings.TrimSpace(mode), "off") {
+		return nil, nil
+	}
+	return history.Open(root, nil)
+}
+
+// logHistory says at startup whether notes are being versioned, because
+// "silently not keeping history" is the one outcome nobody would want to
+// discover later.
+func logHistory(mode string, hist *history.Repo) {
+	switch {
+	case hist == nil:
+		log.Printf("[thoughtmesh] vault history: off (--history=%s)", mode)
+	case !hist.Available():
+		log.Printf("[thoughtmesh] vault history: off — git is not installed, " +
+			"so cloud sync keeps zip backups instead")
+	default:
+		log.Printf("[thoughtmesh] vault history: on — the vault is a git repository")
+	}
 }
 
 // logCloudProviders says at startup which cloud destinations are usable. Not

@@ -266,9 +266,13 @@ export async function listCloudFolders(folderId?: string): Promise<CloudFolder[]
  * "Sync" is bidirectional: local changes go up, remote ones come down,
  * deletions propagate both ways, and anything both sides changed comes back in
  * `result.conflicts` with neither version touched.
+ *
+ * `message` is an optional note from whoever pressed the button. It becomes the
+ * message on the version this run records in the vault's history — six months
+ * later it is the only thing that will tell one sync apart from the next.
  */
-export function runCloudSync(): Promise<CloudRunResponse> {
-  return request('POST', '/sync/run', {});
+export function runCloudSync(message = ''): Promise<CloudRunResponse> {
+  return request('POST', '/sync/run', { message });
 }
 
 /** The paths currently waiting on a decision. */

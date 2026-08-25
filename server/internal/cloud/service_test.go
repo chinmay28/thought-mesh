@@ -3,11 +3,13 @@ package cloud
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"testing"
 	"time"
 
+	"github.com/chinmay28/thought-mesh/server/internal/history"
 	"github.com/chinmay28/thought-mesh/server/internal/vault"
 )
 
@@ -207,6 +209,15 @@ func newTestService(t *testing.T, f *fakeProvider) (*Service, *time.Time) {
 }
 
 func newTestServiceVault(t *testing.T, f *fakeProvider) (*Service, *time.Time, *vault.Vault) {
+	svc, now, v, _ := newTestServiceHistory(t, f, false)
+	return svc, now, v
+}
+
+// newTestServiceHistory wires a service with or without a git history over the
+// vault. Both configurations matter: the zip backups are what a machine without
+// git falls back to, and the commits are what one with git does instead.
+func newTestServiceHistory(t *testing.T, f *fakeProvider, withHistory bool) (
+	*Service, *time.Time, *vault.Vault, *history.Repo) {
 	t.Helper()
 	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
 	dir := t.TempDir()
@@ -214,15 +225,25 @@ func newTestServiceVault(t *testing.T, f *fakeProvider) (*Service, *time.Time, *
 	if err != nil {
 		t.Fatalf("open vault: %v", err)
 	}
+	var hist *history.Repo
+	if withHistory {
+		if _, err := exec.LookPath("git"); err != nil {
+			t.Skip("git is not installed; history is off on such a machine by design")
+		}
+		if hist, err = history.Open(v.Root, func() time.Time { return now }); err != nil {
+			t.Fatalf("open history: %v", err)
+		}
+	}
 	settings := filepath.Join(dir, "thoughtmesh-cloud.json")
 	svc := NewService(
 		NewStore(settings),
 		NewStateStore(settings),
 		v,
+		hist,
 		Registry{f},
 		func() time.Time { return now },
 		"")
-	return svc, &now, v
+	return svc, &now, v, hist
 }
 
 // writeNote puts a file in the vault the way the app would.
@@ -342,7 +363,7 @@ func TestRunRecordsFailureAndReschedules(t *testing.T) {
 	svc.Update(ptr(FrequencyHourly), ptr("/Notes"), ptr("/Notes"))
 
 	f.failNext = context.DeadlineExceeded
-	if _, err := svc.Sync(context.Background()); err == nil {
+	if _, err := svc.Sync(context.Background(), ""); err == nil {
 		t.Fatal("Sync should surface the failure")
 	}
 	set, _ := svc.Settings()

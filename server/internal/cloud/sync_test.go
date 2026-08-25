@@ -12,7 +12,7 @@ import (
 // case here starts from.
 func runSyncNow(t *testing.T, svc *Service) *SyncResult {
 	t.Helper()
-	result, err := svc.Sync(context.Background())
+	result, err := svc.Sync(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
@@ -345,7 +345,7 @@ func TestSyncContinuesPastAFileLevelFailure(t *testing.T) {
 	writeNote(t, v, "B.md", "two\n")
 
 	f.failUpload = os.ErrDeadlineExceeded // the first upload of the run
-	if _, err := svc.Sync(context.Background()); err == nil {
+	if _, err := svc.Sync(context.Background(), ""); err == nil {
 		t.Fatal("Sync should surface the failure")
 	}
 	if len(f.uploads) != 1 {
@@ -469,11 +469,11 @@ func TestRestoreBackupRefusesAnythingElse(t *testing.T) {
 
 func TestSyncNeedsAccountAndFolder(t *testing.T) {
 	svc, _ := newTestService(t, stdFake())
-	if _, err := svc.Sync(context.Background()); !IsConfigError(err) {
+	if _, err := svc.Sync(context.Background(), ""); !IsConfigError(err) {
 		t.Errorf("sync unconnected = %v; want ConfigError", err)
 	}
 	connect(t, svc)
-	if _, err := svc.Sync(context.Background()); !IsConfigError(err) {
+	if _, err := svc.Sync(context.Background(), ""); !IsConfigError(err) {
 		t.Errorf("sync without a folder = %v; want ConfigError", err)
 	}
 }

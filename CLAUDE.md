@@ -56,11 +56,11 @@ npm run dev --workspace @thoughtmesh/web        # PWA on http://localhost:5173, 
 
 The `serve` subcommand (also the default with no args) takes `--host`, `--port`,
 `--vault`, `--web-dist`, `--cloud-settings`, `--dropbox-client-id`,
-`--dropbox-client-secret`, and `--public-url` flags; each **overrides** its
-env-var fallback (`HOST`, `PORT`, `THOUGHTMESH_VAULT`, `WEB_DIST`,
-`THOUGHTMESH_CLOUD_SETTINGS`, `THOUGHTMESH_DROPBOX_CLIENT_ID`, …), which
-overrides the built-in default. `thoughtmesh version`/`--version` prints the
-version.
+`--dropbox-client-secret`, `--public-url` and `--history` flags; each
+**overrides** its env-var fallback (`HOST`, `PORT`, `THOUGHTMESH_VAULT`,
+`WEB_DIST`, `THOUGHTMESH_CLOUD_SETTINGS`, `THOUGHTMESH_DROPBOX_CLIENT_ID`,
+`THOUGHTMESH_HISTORY`, …), which overrides the built-in default.
+`thoughtmesh version`/`--version` prints the version.
 
 In production the Go binary serves the built `apps/web/dist` (embedded at build
 time or via `--web-dist`) from the same origin with an SPA fallback — one
@@ -226,6 +226,45 @@ The cloud routes add two statuses to `api.handleErr`: `cloud.ConfigError`→400
 came from Dropbox). `api.New` takes the service as its third argument and
 skips the routes when it's nil — the web client treats a 404 on
 `GET /api/cloud/sync` as "this server doesn't do cloud sync".
+
+### Version history is a git repository in the vault
+
+`server/internal/history` keeps the vault as an ordinary git repository, in the
+vault folder itself, by **shelling out to `git`** — no cgo, no large dependency,
+and the result is exactly what the machine's git considers valid rather than
+approximately so. Where git is missing the feature is off: `Available()` reports
+it, every call is a no-op, and the API answers `available: 0` rather than 404.
+`--history=off` disables it outright.
+
+Three rules:
+
+- **The repository is local to this server.** `.git` is hidden, so every vault
+  walk and the cloud sync listing already skip it — it never rides along to
+  Dropbox, where a synced `.git` is a well-known way to corrupt one. Don't
+  "fix" this by syncing it.
+- **History is append-only.** A rollback writes the old tree as a *new* commit
+  (`read-tree -u --reset`, then commit), so the state it replaced stays
+  reachable and the rollback is itself undoable. Never rewrite history, touch
+  branches or remotes, or push.
+- **Only `<vault>/.git` counts.** Deliberately not `rev-parse --show-toplevel`:
+  a vault inside somebody's dotfiles repo would resolve to *that* repo and we'd
+  start committing a tree we know nothing about. Every invocation passes
+  `--git-dir`/`--work-tree` explicitly for the same reason. Refs and paths from
+  a request are validated hard before they reach a command line.
+
+The `Watcher` commits when writing *stops*: each tick hashes the tree the vault
+would commit to and commits only when that hash is unchanged since the previous
+tick. It is a tree hash rather than `git status` output because status reports
+which files are dirty and so stops moving after the first keystroke — the
+watcher would commit mid-sentence. Commit subjects carry the time (they're read
+in `git log`, which has no column of dates), and a manual sync's optional
+message becomes the commit body; the kind rides in a `Thought-Mesh-Kind`
+trailer so the UI can label entries without parsing subjects.
+
+**History replaces the pre-sync zip rather than joining it** — the commit taken
+at the top of a sync is the same safety copy and a better one. `cloud.Service`
+writes the zip only where history is unavailable, so there's exactly one undo
+path whichever the machine can offer.
 
 ### Conflicts always offer three ways out
 
