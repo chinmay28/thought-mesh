@@ -27,6 +27,11 @@ import (
 type cloudSettingsBody struct {
 	Settings  cloud.PublicSettings   `json:"settings"`
 	Providers []cloud.PublicProvider `json:"providers"`
+	// Conflicts are the paths waiting on a decision. They ride along with the
+	// settings because the Sync page has to lead with them — an unresolved
+	// conflict is the one thing on that screen that stops being in step until
+	// somebody acts.
+	Conflicts []cloud.Conflict `json:"conflicts"`
 	// RedirectURI is the exact string the user must register with their
 	// provider. It's derived from the origin the request arrived on, so the
 	// setup form can show what to paste rather than asking them to assemble
@@ -58,9 +63,15 @@ func (s *server) writeCloudSettings(w http.ResponseWriter, r *http.Request, stat
 	if s.cloud.RedirectSupported(requestOrigin(r)) {
 		redirectSupported = 1
 	}
+	conflicts, err := s.cloud.Conflicts()
+	if err != nil {
+		handleErr(w, err)
+		return
+	}
 	writeJSON(w, status, cloudSettingsBody{
 		Settings:          set.Public(),
 		Providers:         s.cloud.PublicProviders(),
+		Conflicts:         conflicts,
 		RedirectURI:       s.cloud.RedirectURI(requestOrigin(r)),
 		RedirectSupported: redirectSupported,
 	})
@@ -238,11 +249,11 @@ func (s *server) cloudSyncFolders(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"folders": folders})
 }
 
-// cloudSyncRun zips the vault and uploads it right now. A failure is
-// recorded in the settings *and* returned, so the button reports it instead
-// of quietly looking successful.
+// cloudSyncRun syncs right now, outside the schedule. A failure is recorded in
+// the settings *and* returned, so the button reports it instead of quietly
+// looking successful.
 func (s *server) cloudSyncRun(w http.ResponseWriter, r *http.Request) {
-	result, err := s.cloud.Run(r.Context())
+	result, err := s.cloud.Sync(r.Context())
 	if err != nil {
 		handleErr(w, err)
 		return
@@ -253,47 +264,89 @@ func (s *server) cloudSyncRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"file_name": result.FileName,
-		"bytes":     result.Bytes,
-		"settings":  set.Public(),
+		"result":   result,
+		"settings": set.Public(),
 	})
 }
 
-// cloudSyncSnapshots lists the vault snapshots in the connected folder,
-// newest first, for the restore picker.
-func (s *server) cloudSyncSnapshots(w http.ResponseWriter, r *http.Request) {
-	snapshots, err := s.cloud.Snapshots(r.Context())
+// cloudSyncConflicts lists the paths a sync left contested.
+func (s *server) cloudSyncConflicts(w http.ResponseWriter, _ *http.Request) {
+	conflicts, err := s.cloud.Conflicts()
 	if err != nil {
 		handleErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"snapshots": snapshots})
+	writeJSON(w, http.StatusOK, map[string]any{"conflicts": conflicts})
 }
 
-// cloudSyncRestore downloads one snapshot and replaces the vault with its
-// contents. The server writes a local pre-restore backup of the vault first;
-// the response says where, so the UI can tell the user their undo path.
-func (s *server) cloudSyncRestore(w http.ResponseWriter, r *http.Request) {
+// cloudSyncConflictDetail returns both versions of one contested path plus a
+// merge of them, ready to be shown side by side and edited.
+//
+// The remote side is fetched here rather than when the conflict was detected: a
+// run that finds twenty conflicts shouldn't download twenty files nobody has
+// opened yet.
+func (s *server) cloudSyncConflictDetail(w http.ResponseWriter, r *http.Request) {
+	detail, err := s.cloud.ConflictDetail(r.Context(), r.PathValue("path"))
+	if err != nil {
+		handleErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+// cloudSyncResolve applies the user's decision to one conflict: keep this
+// server's version, take the cloud's, or write a merged text to both.
+func (s *server) cloudSyncResolve(w http.ResponseWriter, r *http.Request) {
 	body, err := decodeLoose(r)
 	if err != nil {
 		handleErr(w, err)
 		return
 	}
-	id, _ := body["id"].(string)
-	if strings.TrimSpace(id) == "" {
-		writeErr(w, http.StatusBadRequest, "Pick a snapshot to restore.")
+	path, _ := body["path"].(string)
+	resolution, _ := body["resolution"].(string)
+	content, _ := body["content"].(string)
+	if strings.TrimSpace(path) == "" {
+		writeErr(w, http.StatusBadRequest, "Which conflict? A path is required.")
 		return
 	}
-	result, err := s.cloud.Restore(r.Context(), id)
+	if _, err := s.cloud.ResolveConflict(r.Context(), path, resolution, content); err != nil {
+		handleErr(w, err)
+		return
+	}
+	s.writeCloudSettings(w, r, http.StatusOK)
+}
+
+// cloudSyncBackups lists the local pre-sync copies of the vault — the undo path
+// for a sync that pulled down something unwelcome.
+func (s *server) cloudSyncBackups(w http.ResponseWriter, _ *http.Request) {
+	backups, err := s.cloud.Backups()
 	if err != nil {
 		handleErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"snapshot":    result.Snapshot,
-		"files":       result.Files,
-		"backup_file": result.BackupFile,
-	})
+	writeJSON(w, http.StatusOK, map[string]any{"backups": backups})
+}
+
+// cloudSyncRestoreBackup replaces the vault with one of those backups. The
+// server takes a fresh backup of the current vault first, so restoring the
+// wrong one is itself undoable.
+func (s *server) cloudSyncRestoreBackup(w http.ResponseWriter, r *http.Request) {
+	body, err := decodeLoose(r)
+	if err != nil {
+		handleErr(w, err)
+		return
+	}
+	name, _ := body["name"].(string)
+	if strings.TrimSpace(name) == "" {
+		writeErr(w, http.StatusBadRequest, "Pick a backup to restore.")
+		return
+	}
+	files, err := s.cloud.RestoreBackup(name)
+	if err != nil {
+		handleErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"backup": name, "files": files})
 }
 
 // requestOrigin reconstructs the origin the browser used, which is what the

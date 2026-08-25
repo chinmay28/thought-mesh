@@ -22,17 +22,26 @@ import (
 // AppVersion is what /api/health and the CLI report.
 var AppVersion = version.String()
 
-// noteInfoJSON is the wire shape of a note without content.
+// noteInfoJSON is the wire shape of a note without content. `categories` is
+// always an array — the wire contract prefers an empty list to a null, and a
+// note with no categories is the ordinary case, not a missing value.
 type noteInfoJSON struct {
-	Path    string `json:"path"`
-	Name    string `json:"name"`
-	Dir     string `json:"dir"`
-	Size    int64  `json:"size"`
-	MtimeMs int64  `json:"mtime_ms"`
+	Path       string   `json:"path"`
+	Name       string   `json:"name"`
+	Dir        string   `json:"dir"`
+	Size       int64    `json:"size"`
+	MtimeMs    int64    `json:"mtime_ms"`
+	Categories []string `json:"categories"`
 }
 
-func infoJSON(n *vault.NoteInfo) noteInfoJSON {
-	return noteInfoJSON{Path: n.Path, Name: n.Name, Dir: n.Dir, Size: n.Size, MtimeMs: n.MtimeMs}
+func infoJSON(n *vault.NoteInfo, categories []string) noteInfoJSON {
+	if categories == nil {
+		categories = []string{}
+	}
+	return noteInfoJSON{
+		Path: n.Path, Name: n.Name, Dir: n.Dir,
+		Size: n.Size, MtimeMs: n.MtimeMs, Categories: categories,
+	}
 }
 
 // noteJSON is the full note: info + content + link structure.
@@ -58,6 +67,11 @@ func New(v *vault.Vault, m *mesh.Mesh, cl *cloud.Service) http.Handler {
 	mux.HandleFunc("POST /api/rename", s.renameNote)
 	mux.HandleFunc("GET /api/search", s.search)
 	mux.HandleFunc("GET /api/graph", s.graph)
+	mux.HandleFunc("POST /api/merge", s.mergeText)
+	mux.HandleFunc("GET /api/categories", s.listCategories)
+	mux.HandleFunc("POST /api/categories/rename", s.renameCategory)
+	mux.HandleFunc("POST /api/categories/delete", s.deleteCategory)
+	mux.HandleFunc("POST /api/categories/assign", s.setNoteCategories)
 	if s.cloud != nil {
 		mux.HandleFunc("GET /api/cloud/sync", s.cloudSyncSettings)
 		mux.HandleFunc("PATCH /api/cloud/sync", s.cloudSyncUpdate)
@@ -67,8 +81,11 @@ func New(v *vault.Vault, m *mesh.Mesh, cl *cloud.Service) http.Handler {
 		mux.HandleFunc("POST /api/cloud/sync/disconnect", s.cloudSyncDisconnect)
 		mux.HandleFunc("GET /api/cloud/sync/folders", s.cloudSyncFolders)
 		mux.HandleFunc("POST /api/cloud/sync/run", s.cloudSyncRun)
-		mux.HandleFunc("GET /api/cloud/sync/snapshots", s.cloudSyncSnapshots)
-		mux.HandleFunc("POST /api/cloud/sync/restore", s.cloudSyncRestore)
+		mux.HandleFunc("GET /api/cloud/sync/conflicts", s.cloudSyncConflicts)
+		mux.HandleFunc("GET /api/cloud/sync/conflicts/{path...}", s.cloudSyncConflictDetail)
+		mux.HandleFunc("POST /api/cloud/sync/resolve", s.cloudSyncResolve)
+		mux.HandleFunc("GET /api/cloud/sync/backups", s.cloudSyncBackups)
+		mux.HandleFunc("POST /api/cloud/sync/backups/restore", s.cloudSyncRestoreBackup)
 		mux.HandleFunc("PUT /api/cloud/sync/providers/{provider}", s.cloudSyncSetCredentials)
 		mux.HandleFunc("DELETE /api/cloud/sync/providers/{provider}", s.cloudSyncClearCredentials)
 	}
@@ -103,6 +120,7 @@ func handleErr(w http.ResponseWriter, err error) {
 	var ve *vault.ValidationError
 	var nf *vault.NotFoundError
 	var ex *vault.ExistsError
+	var st *vault.StaleError
 	var ce *cloud.ConfigError
 	var pe *cloud.ProviderError
 	switch {
@@ -112,6 +130,8 @@ func handleErr(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusNotFound, nf.Error())
 	case errors.As(err, &ex):
 		writeErr(w, http.StatusConflict, ex.Error())
+	case errors.As(err, &st):
+		writeErr(w, http.StatusConflict, st.Error())
 	case errors.As(err, &ce):
 		writeErr(w, http.StatusBadRequest, ce.Error())
 	case errors.As(err, &pe):
@@ -144,17 +164,40 @@ func (s *server) health(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-func (s *server) listNotes(w http.ResponseWriter, _ *http.Request) {
-	notes, err := s.v.List()
+// listNotes goes through the mesh rather than the vault directly, because the
+// list carries each note's categories and those come from the snapshot's
+// cached parse. On an unchanged vault that costs a stat-walk and no reads.
+//
+// `?category=` narrows the list to the notes carrying that category, matched
+// case-insensitively. Filtering server-side keeps the client a transport: it
+// is the same reason search and backlinks live here.
+func (s *server) listNotes(w http.ResponseWriter, r *http.Request) {
+	snap, err := s.m.Snapshot()
 	if err != nil {
 		handleErr(w, err)
 		return
 	}
-	out := make([]noteInfoJSON, 0, len(notes))
-	for i := range notes {
-		out = append(out, infoJSON(&notes[i]))
+	filter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("category")))
+	out := make([]noteInfoJSON, 0, len(snap.Notes))
+	for i := range snap.Notes {
+		note := &snap.Notes[i]
+		cats := snap.Categories(note.Path)
+		if filter != "" && !hasCategory(cats, filter) {
+			continue
+		}
+		out = append(out, infoJSON(note, cats))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"notes": out})
+}
+
+// hasCategory reports whether cats holds lowerName, compared case-insensitively.
+func hasCategory(cats []string, lowerName string) bool {
+	for _, cat := range cats {
+		if strings.ToLower(cat) == lowerName {
+			return true
+		}
+	}
+	return false
 }
 
 // fullNote assembles the note + links + backlinks response body.
@@ -176,7 +219,7 @@ func (s *server) fullNote(path string) (*noteJSON, error) {
 		backlinks = []mesh.Backlink{}
 	}
 	return &noteJSON{
-		noteInfoJSON: infoJSON(info),
+		noteInfoJSON: infoJSON(info, snap.Categories(info.Path)),
 		Content:      content,
 		Links:        links,
 		Backlinks:    backlinks,
@@ -194,14 +237,24 @@ func (s *server) getNote(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) createNote(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Path    string `json:"path"`
-		Name    string `json:"name"`
-		Dir     string `json:"dir"`
-		Content string `json:"content"`
+		Path       string   `json:"path"`
+		Name       string   `json:"name"`
+		Dir        string   `json:"dir"`
+		Content    string   `json:"content"`
+		Categories []string `json:"categories"`
 	}
 	if err := decodeBody(r, &body); err != nil {
 		handleErr(w, err)
 		return
+	}
+	content := body.Content
+	if len(body.Categories) > 0 {
+		cats, err := vault.NormalizeCategories(body.Categories)
+		if err != nil {
+			handleErr(w, err)
+			return
+		}
+		content = vault.WithCategories(content, cats)
 	}
 	path := body.Path
 	if path == "" {
@@ -215,7 +268,7 @@ func (s *server) createNote(w http.ResponseWriter, r *http.Request) {
 			path = dir + "/" + path
 		}
 	}
-	info, err := s.v.Create(path, body.Content)
+	info, err := s.v.Create(path, content)
 	if err != nil {
 		handleErr(w, err)
 		return
@@ -250,7 +303,7 @@ func (s *server) saveNote(w http.ResponseWriter, r *http.Request) {
 	// told when the file moved beneath it (another device, another editor),
 	// instead of silently overwriting that work.
 	if body.BaseMtimeMs != nil && *body.BaseMtimeMs != info.MtimeMs {
-		writeErr(w, http.StatusConflict, "note changed on disk since it was loaded")
+		handleErr(w, &vault.StaleError{Path: info.Path})
 		return
 	}
 	if _, err := s.v.Write(info.Path, *body.Content); err != nil {

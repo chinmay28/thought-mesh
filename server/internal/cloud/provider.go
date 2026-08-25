@@ -1,5 +1,13 @@
-// Package cloud uploads a snapshot of the vault to a folder the user picked
-// in their Dropbox, on a schedule they chose.
+// Package cloud keeps the vault and a folder in the user's Dropbox in step,
+// on a schedule they chose.
+//
+// The folder holds the vault as a plain directory tree — the same notes, in the
+// same folders, under the same names — not an archive of it. That is what makes
+// it a sync rather than a backup: files edited in Dropbox (on a phone, on
+// another machine, by another Thought Mesh server pointed at the same folder)
+// come back down, deletions propagate both ways, and a note changed in two
+// places at once surfaces as a conflict the user resolves instead of one side
+// silently winning.
 //
 // The pieces are deliberately separated (the same shape as CountRoster's
 // cloud backup, which this is ported from): `Provider` is everything
@@ -55,12 +63,22 @@ type Account struct {
 	Label string
 }
 
-// SnapshotFile is one file in the connected folder — a restore candidate.
-// ID is the provider's native handle (a Dropbox path); ModifiedMs is the
-// provider's server-side modification time.
-type SnapshotFile struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
+// RemoteFile is one file in the synced folder, as the provider reports it.
+//
+// Rel is the path *within* the folder — "journal/2026-08-23.md" — which is
+// exactly the vault-relative path of its local counterpart. Providers differ in
+// how they name things absolutely, so each one converts to and from this shared
+// form itself, and the sync engine never has to know what a Dropbox path looks
+// like.
+//
+// Hash is the provider's own content hash (see contentHash), which is what lets
+// a listing answer "did this change?" without downloading anything. Rev is the
+// provider's revision handle, carried so an upload can be made conditional on
+// the remote still being where we last saw it.
+type RemoteFile struct {
+	Rel        string `json:"rel"`
+	Hash       string `json:"hash"`
+	Rev        string `json:"rev"`
 	Size       int64  `json:"size"`
 	ModifiedMs int64  `json:"modified_ms"`
 }
@@ -110,14 +128,34 @@ type Provider interface {
 	// ListFolders lists the sub-folders of folderID (empty = the account
 	// root), for the folder picker.
 	ListFolders(ctx context.Context, accessToken, folderID string) ([]Folder, error)
-	// ListFiles lists the files directly inside folderID, for the restore
-	// picker. The service filters to vault snapshots; the provider doesn't.
-	ListFiles(ctx context.Context, accessToken, folderID string) ([]SnapshotFile, error)
-	// Upload writes data as a new file called name inside folderID.
-	Upload(ctx context.Context, accessToken, folderID, name string, data []byte) error
-	// Download reads one file back, by the ID ListFiles reported.
-	Download(ctx context.Context, accessToken, fileID string) ([]byte, error)
+	// ListTree lists every file under folderID, at any depth, with the hash and
+	// revision of each. This is the remote half of a sync: one call has to
+	// describe the whole tree, because the engine compares it against the whole
+	// vault.
+	ListTree(ctx context.Context, accessToken, folderID string) ([]RemoteFile, error)
+	// UploadFile writes data to `rel` inside folderID, creating intermediate
+	// folders as needed, and reports the file as it now stands.
+	//
+	// A non-empty `rev` makes the write conditional: replace the revision we
+	// last saw, and fail if the remote has moved on since. That is the last
+	// guard against a change made in Dropbox between this sync's listing and
+	// its upload — without it a two-way sync would still lose writes, just in a
+	// narrower window. An empty rev means "we have decided this version wins"
+	// and overwrites unconditionally.
+	UploadFile(ctx context.Context, accessToken, folderID, rel string, data []byte, rev string) (RemoteFile, error)
+	// DownloadFile reads one file back by its path within the folder.
+	DownloadFile(ctx context.Context, accessToken, folderID, rel string) ([]byte, error)
+	// DeleteFile removes one file. A file that is already gone is not an
+	// error — the caller wanted it absent, and it is.
+	DeleteFile(ctx context.Context, accessToken, folderID, rel string) error
 }
+
+// ErrRevisionConflict is what a provider returns when a conditional upload was
+// refused because the remote file had moved on. The sync engine turns it into
+// an ordinary conflict rather than a failed run: somebody wrote to Dropbox
+// while we were working, which is the situation the whole conflict machinery
+// exists for.
+var ErrRevisionConflict = errors.New("the file in the cloud changed while syncing")
 
 // Credentials are the OAuth client the operator registered with a provider.
 // Thought Mesh is self-hosted, so there is no shipped application identity to

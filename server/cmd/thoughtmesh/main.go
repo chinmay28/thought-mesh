@@ -142,15 +142,19 @@ func run(cfg config) error {
 	// Cloud sync settings live OUTSIDE the vault, deliberately: the file
 	// holds OAuth tokens, and the vault is exactly what users copy, sync and
 	// version by other means — a token that rode along in it would leak with
-	// the first push. Default: beside the vault, not inside it.
+	// the first push. Default: beside the vault, not inside it. The sync
+	// bookkeeping (what both sides looked like when they last agreed) and the
+	// local pre-sync backups keep it company, for the same reason.
 	settingsPath := cfg.cloudSettings
 	if settingsPath == "" {
 		settingsPath = filepath.Join(filepath.Dir(v.Root), "thoughtmesh-cloud.json")
 	}
 	cloudSvc := cloud.NewService(
 		cloud.NewStore(settingsPath),
+		cloud.NewStateStore(settingsPath),
+		v,
 		cloud.NewRegistry(cfg.dropbox, nil, time.Now),
-		v.Zip, v.RestoreZip, nil, cfg.publicURL)
+		nil, cfg.publicURL)
 	// The scheduler is a background poller over the settings file, so it
 	// costs one small read a minute when nothing is configured — cheap enough
 	// to always run, and it means enabling a schedule from the UI takes

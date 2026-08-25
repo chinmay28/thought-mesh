@@ -55,8 +55,23 @@ type Settings struct {
 	LastRunAt      *string `json:"last_run_at"`
 	LastStatus     *string `json:"last_status"`
 	LastError      *string `json:"last_error"`
-	LastFileName   *string `json:"last_file_name"`
-	UpdatedAt      *string `json:"updated_at"`
+	// LastResult is what the most recent run moved. Nil before the first run.
+	LastResult *RunSummary `json:"last_result"`
+	UpdatedAt  *string     `json:"updated_at"`
+}
+
+// RunSummary is what one sync did, in the shape both the settings file and the
+// wire carry. A sync's outcome is a handful of counts rather than a file name,
+// which is the whole difference between mirroring a tree and dropping an
+// archive in a folder.
+type RunSummary struct {
+	Uploaded      int `json:"uploaded"`
+	Downloaded    int `json:"downloaded"`
+	DeletedLocal  int `json:"deleted_local"`
+	DeletedRemote int `json:"deleted_remote"`
+	Unchanged     int `json:"unchanged"`
+	Conflicts     int `json:"conflicts"`
+	Failed        int `json:"failed"`
 }
 
 // Connected reports whether an account is linked and usable.
@@ -76,17 +91,17 @@ func (s *Settings) Scheduled() bool {
 // deliberately omits every token: the browser never needs one, and the
 // settings screen is reachable by anyone on the network the server trusts.
 type PublicSettings struct {
-	Provider     *string `json:"provider"`
-	AccountLabel *string `json:"account_label"`
-	Connected    int     `json:"connected"`
-	FolderID     *string `json:"folder_id"`
-	FolderPath   *string `json:"folder_path"`
-	Frequency    string  `json:"frequency"`
-	NextRunAt    *string `json:"next_run_at"`
-	LastRunAt    *string `json:"last_run_at"`
-	LastStatus   *string `json:"last_status"`
-	LastError    *string `json:"last_error"`
-	LastFileName *string `json:"last_file_name"`
+	Provider     *string     `json:"provider"`
+	AccountLabel *string     `json:"account_label"`
+	Connected    int         `json:"connected"`
+	FolderID     *string     `json:"folder_id"`
+	FolderPath   *string     `json:"folder_path"`
+	Frequency    string      `json:"frequency"`
+	NextRunAt    *string     `json:"next_run_at"`
+	LastRunAt    *string     `json:"last_run_at"`
+	LastStatus   *string     `json:"last_status"`
+	LastError    *string     `json:"last_error"`
+	LastResult   *RunSummary `json:"last_result"`
 }
 
 // Public projects the settings onto the wire shape.
@@ -106,7 +121,7 @@ func (s *Settings) Public() PublicSettings {
 		LastRunAt:    s.LastRunAt,
 		LastStatus:   s.LastStatus,
 		LastError:    s.LastError,
-		LastFileName: s.LastFileName,
+		LastResult:   s.LastResult,
 	}
 }
 

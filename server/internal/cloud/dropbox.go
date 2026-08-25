@@ -8,16 +8,15 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"path"
 	"strings"
 	"time"
 )
 
-// Dropbox scopes: read metadata to browse folders and list snapshots, write
-// content to upload the vault snapshot, read content to download one back
-// for a restore, and read the account so the UI can name whose Dropbox this
-// is. (`files.content.read` joined the set when restore did — an account
-// connected before that needs a reconnect before it can restore.)
+// Dropbox scopes: read metadata to list the synced folder, write content to
+// push local changes up, read content to pull remote ones down, and read the
+// account so the UI can name whose Dropbox this is. All four are needed for a
+// two-way sync — an account connected against an older, upload-only scope set
+// has to be reconnected before it can pull anything.
 const dropboxScopes = "account_info.read files.metadata.read files.content.read files.content.write"
 
 // Dropbox is the Dropbox provider. The three base URLs are fields rather than
@@ -193,6 +192,8 @@ type dropboxEntry struct {
 	PathLower      string `json:"path_lower"`
 	Size           int64  `json:"size"`
 	ServerModified string `json:"server_modified"`
+	Rev            string `json:"rev"`
+	ContentHash    string `json:"content_hash"`
 }
 
 func (e dropboxEntry) path() string {
@@ -202,41 +203,65 @@ func (e dropboxEntry) path() string {
 	return e.PathLower
 }
 
-// listEntries fetches one level of the Dropbox tree. Dropbox identifies an
-// entry by its path, and the root is the empty string — which is exactly
-// what an empty folderID means here, so no translation is needed.
-func (d *Dropbox) listEntries(ctx context.Context, accessToken, folderID string) ([]dropboxEntry, error) {
+// maxListPages bounds a recursive listing. Dropbox pages at 1000 entries, so
+// this allows a folder of two million files — far past any vault, and a stop
+// short of looping forever on a cursor that never clears has_more.
+const maxListPages = 2000
+
+// listEntries fetches the Dropbox tree under folderID, one level deep or all
+// the way down. Dropbox identifies an entry by its path, and the root is the
+// empty string — which is exactly what an empty folderID means here, so no
+// translation is needed.
+//
+// A recursive listing arrives in pages, and the continuation endpoint takes the
+// cursor rather than the original arguments; both are followed here so callers
+// always see one complete tree.
+func (d *Dropbox) listEntries(ctx context.Context, accessToken, folderID string, recursive bool) ([]dropboxEntry, error) {
 	payload, err := json.Marshal(map[string]any{
 		"path":      normalizeDropboxPath(folderID),
-		"recursive": false,
+		"recursive": recursive,
 		"limit":     1000,
 	})
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		d.APIBase+"/2/files/list_folder", bytes.NewReader(payload))
-	if err != nil {
-		return nil, err
+	endpoint := d.APIBase + "/2/files/list_folder"
+	var entries []dropboxEntry
+	for page := 0; page < maxListPages; page++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint,
+			bytes.NewReader(payload))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+		req.Header.Set("Content-Type", "application/json")
+		res, err := d.client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		var body struct {
+			Entries []dropboxEntry `json:"entries"`
+			Cursor  string         `json:"cursor"`
+			HasMore bool           `json:"has_more"`
+		}
+		if err := decodeJSON(res, "Dropbox folder listing", &body); err != nil {
+			return nil, err
+		}
+		entries = append(entries, body.Entries...)
+		if !body.HasMore || body.Cursor == "" {
+			return entries, nil
+		}
+		endpoint = d.APIBase + "/2/files/list_folder/continue"
+		if payload, err = json.Marshal(map[string]any{"cursor": body.Cursor}); err != nil {
+			return nil, err
+		}
 	}
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-	req.Header.Set("Content-Type", "application/json")
-	res, err := d.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	var body struct {
-		Entries []dropboxEntry `json:"entries"`
-	}
-	if err := decodeJSON(res, "Dropbox folder listing", &body); err != nil {
-		return nil, err
-	}
-	return body.Entries, nil
+	return entries, nil
 }
 
 // ListFolders lists the sub-folders of folderID, for the folder picker.
 func (d *Dropbox) ListFolders(ctx context.Context, accessToken, folderID string) ([]Folder, error) {
-	entries, err := d.listEntries(ctx, accessToken, folderID)
+	entries, err := d.listEntries(ctx, accessToken, folderID, false)
 	if err != nil {
 		return nil, err
 	}
@@ -250,18 +275,32 @@ func (d *Dropbox) ListFolders(ctx context.Context, accessToken, folderID string)
 	return folders, nil
 }
 
-// ListFiles lists the files directly inside folderID, for the restore picker.
-func (d *Dropbox) ListFiles(ctx context.Context, accessToken, folderID string) ([]SnapshotFile, error) {
-	entries, err := d.listEntries(ctx, accessToken, folderID)
+// ListTree lists every file under folderID, at any depth — the remote half of
+// a sync. Folder entries are dropped: a folder in Dropbox exists only because
+// something is in it, exactly as in the vault, so mirroring the files mirrors
+// the structure.
+func (d *Dropbox) ListTree(ctx context.Context, accessToken, folderID string) ([]RemoteFile, error) {
+	entries, err := d.listEntries(ctx, accessToken, folderID, true)
 	if err != nil {
 		return nil, err
 	}
-	files := []SnapshotFile{}
+	prefix := normalizeDropboxPath(folderID)
+	files := []RemoteFile{}
 	for _, e := range entries {
 		if e.Tag != "file" {
 			continue
 		}
-		f := SnapshotFile{ID: e.path(), Name: e.Name, Size: e.Size}
+		rel := relativeDropboxPath(prefix, e.path())
+		if rel == "" {
+			continue // outside the folder we asked about, or the folder itself
+		}
+		// Hidden entries are not synced, matching what the vault walk skips:
+		// .git and .obsidian belong to whatever tool made them, on the machine
+		// that made them.
+		if hasHiddenSegment(rel) {
+			continue
+		}
+		f := RemoteFile{Rel: rel, Hash: e.ContentHash, Rev: e.Rev, Size: e.Size}
 		if t, err := time.Parse(time.RFC3339, e.ServerModified); err == nil {
 			f.ModifiedMs = t.UnixMilli()
 		}
@@ -270,42 +309,70 @@ func (d *Dropbox) ListFiles(ctx context.Context, accessToken, folderID string) (
 	return files, nil
 }
 
-// Upload writes the snapshot into the chosen folder. `autorename` is on so
-// two runs in the same minute can't fail on a name clash — the schedule
-// matters more than the exact filename.
-func (d *Dropbox) Upload(ctx context.Context, accessToken, folderID, name string, data []byte) error {
+// UploadFile writes one file into the synced folder.
+//
+// With a rev the write is conditional (`update` mode): Dropbox replaces that
+// exact revision or refuses, which is what turns "somebody edited it in Dropbox
+// while we were uploading" into a conflict instead of a silent overwrite.
+// `autorename` is off throughout — a sync must land on the path it meant, and a
+// "file (1).md" appearing in the vault next round would be worse than a
+// reported failure.
+func (d *Dropbox) UploadFile(ctx context.Context, accessToken, folderID, rel string, data []byte, rev string) (RemoteFile, error) {
+	var mode any = "overwrite"
+	if rev != "" {
+		mode = map[string]any{".tag": "update", "update": rev}
+	}
 	arg, err := json.Marshal(map[string]any{
-		"path":       path.Join("/"+strings.Trim(normalizeDropboxPath(folderID), "/"), name),
-		"mode":       "add",
-		"autorename": true,
+		"path":       joinDropboxPath(folderID, rel),
+		"mode":       mode,
+		"autorename": false,
 		"mute":       true,
 	})
 	if err != nil {
-		return err
+		return RemoteFile{}, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		d.ContentBase+"/2/files/upload", bytes.NewReader(data))
 	if err != nil {
-		return err
+		return RemoteFile{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("Dropbox-API-Arg", string(arg))
 	res, err := d.client.Do(req)
 	if err != nil {
-		return err
+		return RemoteFile{}, err
 	}
-	return decodeJSON(res, "Dropbox upload", nil)
+	var entry dropboxEntry
+	if err := decodeJSON(res, "Dropbox upload", &entry); err != nil {
+		if isRevisionConflict(err) {
+			return RemoteFile{}, ErrRevisionConflict
+		}
+		return RemoteFile{}, err
+	}
+	out := RemoteFile{Rel: rel, Hash: entry.ContentHash, Rev: entry.Rev, Size: entry.Size}
+	if out.Hash == "" {
+		// Older responses omit the hash; we know the bytes we just sent.
+		out.Hash = contentHash(data)
+		out.Size = int64(len(data))
+	}
+	if t, err := time.Parse(time.RFC3339, entry.ServerModified); err == nil {
+		out.ModifiedMs = t.UnixMilli()
+	}
+	return out, nil
 }
 
-// maxDownload bounds what a restore will pull down — well past any plausible
-// vault of markdown, small enough that a mistaken selection (or a hostile
-// object at the path) can't exhaust the server's memory.
-const maxDownload = 1 << 30 // 1 GiB
+// isRevisionConflict recognizes the one upload failure that is not really a
+// failure: `update` mode refused because the remote revision moved. Dropbox
+// reports it as a `conflict` summary inside the error body.
+func isRevisionConflict(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "conflict") && strings.Contains(msg, "path")
+}
 
-// Download reads one file back, for a restore.
-func (d *Dropbox) Download(ctx context.Context, accessToken, fileID string) ([]byte, error) {
-	arg, err := json.Marshal(map[string]any{"path": fileID})
+// DownloadFile reads one file back out of the synced folder.
+func (d *Dropbox) DownloadFile(ctx context.Context, accessToken, folderID, rel string) ([]byte, error) {
+	arg, err := json.Marshal(map[string]any{"path": joinDropboxPath(folderID, rel)})
 	if err != nil {
 		return nil, err
 	}
@@ -329,10 +396,42 @@ func (d *Dropbox) Download(ctx context.Context, accessToken, fileID string) ([]b
 		return nil, err
 	}
 	if len(data) > maxDownload {
-		return nil, fmt.Errorf("Dropbox download larger than %d bytes — refusing to restore it", maxDownload)
+		return nil, fmt.Errorf("%s is larger than %d bytes — refusing to download it", rel, maxDownload)
 	}
 	return data, nil
 }
+
+// DeleteFile removes one file from the synced folder. A file that is already
+// gone counts as success: the caller wanted it absent.
+func (d *Dropbox) DeleteFile(ctx context.Context, accessToken, folderID, rel string) error {
+	payload, err := json.Marshal(map[string]any{"path": joinDropboxPath(folderID, rel)})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		d.APIBase+"/2/files/delete_v2", bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+	res, err := d.client.Do(req)
+	if err != nil {
+		return err
+	}
+	if err := decodeJSON(res, "Dropbox delete", nil); err != nil {
+		if strings.Contains(err.Error(), "not_found") {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+// maxDownload bounds what a single file transfer will pull down — well past
+// any plausible note or attachment, small enough that a hostile object at the
+// path can't exhaust the server's memory.
+const maxDownload = 1 << 30 // 1 GiB
 
 func (d *Dropbox) postForm(ctx context.Context, endpoint string, form url.Values, what string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint,
@@ -362,4 +461,38 @@ func normalizeDropboxPath(folderID string) string {
 		return ""
 	}
 	return "/" + trimmed
+}
+
+// joinDropboxPath composes the absolute path of one synced file: the chosen
+// folder plus the vault-relative path, which is the only place the two naming
+// schemes meet.
+func joinDropboxPath(folderID, rel string) string {
+	return normalizeDropboxPath(folderID) + "/" + strings.Trim(rel, "/")
+}
+
+// relativeDropboxPath turns an absolute Dropbox path back into a
+// vault-relative one. The comparison is case-insensitive because Dropbox is:
+// path_display preserves the case a file was created with, while the folder
+// handle carries whatever case the picker showed, and the two need not match.
+// Returns "" for anything that isn't inside the folder.
+func relativeDropboxPath(prefix, full string) string {
+	if prefix == "" {
+		return strings.TrimPrefix(full, "/")
+	}
+	if !strings.HasPrefix(strings.ToLower(full), strings.ToLower(prefix)+"/") {
+		return ""
+	}
+	return full[len(prefix)+1:]
+}
+
+// hasHiddenSegment reports whether any part of a path is dot-prefixed. The
+// vault walk skips those, so the sync has to as well — otherwise a .obsidian
+// folder from one machine would be pushed onto every other one.
+func hasHiddenSegment(rel string) bool {
+	for _, seg := range strings.Split(rel, "/") {
+		if strings.HasPrefix(seg, ".") {
+			return true
+		}
+	}
+	return false
 }

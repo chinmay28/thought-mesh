@@ -225,3 +225,158 @@ func TestUnknownEndpoint(t *testing.T) {
 		t.Errorf("unknown = %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// --- categories ---------------------------------------------------------------
+
+func TestNoteCategoriesLifecycle(t *testing.T) {
+	h := newServer(t)
+
+	// Categories can be set at creation…
+	rec := do(t, h, "POST", "/api/notes",
+		`{"path":"Idea.md","content":"a thought\n","categories":["Ideas","ideas"]}`)
+	if rec.Code != 201 {
+		t.Fatalf("create = %d: %s", rec.Code, rec.Body.String())
+	}
+	note := decode(t, rec)
+	cats := note["categories"].([]any)
+	if len(cats) != 1 || cats[0] != "Ideas" {
+		t.Fatalf("categories = %v", cats)
+	}
+	// …and they live in the note's own frontmatter, not in a sidecar.
+	if content := note["content"].(string); !strings.HasPrefix(content, "---\ncategories: [Ideas]\n---\n") {
+		t.Errorf("content = %q", content)
+	}
+
+	// A note with none reports an empty array, never a null.
+	do(t, h, "POST", "/api/notes", `{"path":"Plain.md","content":"nothing\n"}`)
+	plain := decode(t, do(t, h, "GET", "/api/notes/Plain.md", ""))
+	if got, ok := plain["categories"].([]any); !ok || len(got) != 0 {
+		t.Errorf("plain note categories = %v", plain["categories"])
+	}
+
+	// Assigning replaces the list wholesale.
+	rec = do(t, h, "POST", "/api/categories/assign",
+		`{"path":"Idea.md","categories":["Work","Reading list"]}`)
+	if rec.Code != 200 {
+		t.Fatalf("assign = %d: %s", rec.Code, rec.Body.String())
+	}
+	cats = decode(t, rec)["categories"].([]any)
+	if len(cats) != 2 || cats[0] != "Work" || cats[1] != "Reading list" {
+		t.Errorf("after assign = %v", cats)
+	}
+
+	// The vocabulary is derived from the notes, with counts.
+	body := decode(t, do(t, h, "GET", "/api/categories", ""))
+	all := body["categories"].([]any)
+	if len(all) != 2 {
+		t.Fatalf("vocabulary = %v", all)
+	}
+	first := all[0].(map[string]any)
+	if first["name"] != "Reading list" || first["count"] != float64(1) {
+		t.Errorf("first category = %v", first)
+	}
+
+	// Listing can be narrowed to one category, case-insensitively.
+	notes := decode(t, do(t, h, "GET", "/api/notes?category=work", ""))["notes"].([]any)
+	if len(notes) != 1 || notes[0].(map[string]any)["path"] != "Idea.md" {
+		t.Errorf("filtered notes = %v", notes)
+	}
+
+	// Clearing takes the frontmatter block with it.
+	rec = do(t, h, "POST", "/api/categories/assign", `{"path":"Idea.md","categories":[]}`)
+	if got := decode(t, rec)["content"].(string); strings.Contains(got, "categories") {
+		t.Errorf("cleared note = %q", got)
+	}
+}
+
+func TestCategoryRenameAndDelete(t *testing.T) {
+	h := newServer(t)
+	do(t, h, "POST", "/api/notes", `{"path":"A.md","content":"a\n","categories":["Work"]}`)
+	do(t, h, "POST", "/api/notes", `{"path":"B.md","content":"b\n","categories":["work","Ideas"]}`)
+
+	// One rename reaches every note carrying the name, in either spelling.
+	rec := do(t, h, "POST", "/api/categories/rename", `{"from":"Work","to":"Day job"}`)
+	if rec.Code != 200 {
+		t.Fatalf("rename = %d: %s", rec.Code, rec.Body.String())
+	}
+	body := decode(t, rec)
+	if body["updated_notes"] != float64(2) {
+		t.Errorf("updated = %v", body["updated_notes"])
+	}
+	names := categoryNames(body)
+	if names["Day job"] != 2 || names["Work"] != 0 {
+		t.Errorf("after rename = %v", names)
+	}
+
+	rec = do(t, h, "POST", "/api/categories/delete", `{"name":"Day job"}`)
+	if rec.Code != 200 {
+		t.Fatalf("delete = %d: %s", rec.Code, rec.Body.String())
+	}
+	if names = categoryNames(decode(t, rec)); names["Day job"] != 0 || names["Ideas"] != 1 {
+		t.Errorf("after delete = %v", names)
+	}
+	// The notes themselves are untouched.
+	if content := decode(t, do(t, h, "GET", "/api/notes/A.md", ""))["content"].(string); content != "a\n" {
+		t.Errorf("note damaged by a category delete: %q", content)
+	}
+
+	// An unusable name is a 400, not a silent no-op.
+	if rec = do(t, h, "POST", "/api/categories/rename", `{"from":"Ideas","to":"a, b"}`); rec.Code != 400 {
+		t.Errorf("bad rename target = %d", rec.Code)
+	}
+}
+
+// Assigning a category from a stale screen is the same 409 a stale content save
+// gets — the client then offers the choice rather than one side just winning.
+func TestAssignCategoriesRejectsAStaleBaseMtime(t *testing.T) {
+	h := newServer(t)
+	do(t, h, "POST", "/api/notes", `{"path":"A.md","content":"a\n"}`)
+	rec := do(t, h, "POST", "/api/categories/assign",
+		`{"path":"A.md","categories":["Ideas"],"base_mtime_ms":1}`)
+	if rec.Code != 409 || decode(t, rec)["error"] == "" {
+		t.Errorf("stale assign = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func categoryNames(body map[string]any) map[string]int {
+	out := map[string]int{}
+	for _, entry := range body["categories"].([]any) {
+		c := entry.(map[string]any)
+		out[c["name"].(string)] = int(c["count"].(float64))
+	}
+	return out
+}
+
+// --- merge --------------------------------------------------------------------
+
+// The editor's third way out of a save conflict. It is stateless on purpose:
+// only the browser still holds the version the edit started from.
+func TestMergeEndpoint(t *testing.T) {
+	h := newServer(t)
+
+	// Edits in different places combine with nothing to decide.
+	rec := do(t, h, "POST", "/api/merge",
+		`{"base":"one\ntwo\n","mine":"one mine\ntwo\n","theirs":"one\ntwo theirs\n"}`)
+	if rec.Code != 200 {
+		t.Fatalf("merge = %d: %s", rec.Code, rec.Body.String())
+	}
+	body := decode(t, rec)
+	if body["conflicts"] != float64(0) || body["merged"] != "one mine\ntwo theirs\n" {
+		t.Errorf("merge = %v", body)
+	}
+
+	// The same line on both sides comes back marked for a human.
+	rec = do(t, h, "POST", "/api/merge",
+		`{"base":"one\n","mine":"one mine\n","theirs":"one theirs\n"}`)
+	body = decode(t, rec)
+	if body["conflicts"] != float64(1) || !strings.Contains(body["merged"].(string), "<<<<<<< mine") {
+		t.Errorf("conflicting merge = %v", body)
+	}
+
+	// With no base at all, the shared ends survive and the middle is contested.
+	rec = do(t, h, "POST", "/api/merge", `{"mine":"head\nmine\ntail\n","theirs":"head\ntheirs\ntail\n"}`)
+	body = decode(t, rec)
+	if body["conflicts"] != float64(1) || !strings.HasPrefix(body["merged"].(string), "head\n") {
+		t.Errorf("baseless merge = %v", body)
+	}
+}

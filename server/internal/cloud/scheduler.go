@@ -56,11 +56,13 @@ func (s *Scheduler) Tick(ctx context.Context) {
 	}
 	if ran {
 		set, err := s.Service.Settings()
-		if err != nil || set.LastFileName == nil {
-			s.logf("[thoughtmesh] scheduled cloud sync uploaded")
+		if err != nil || set.LastResult == nil {
+			s.logf("[thoughtmesh] scheduled cloud sync ran")
 			return
 		}
-		s.logf("[thoughtmesh] scheduled cloud sync uploaded %s", *set.LastFileName)
+		r := set.LastResult
+		s.logf("[thoughtmesh] scheduled cloud sync: %d up, %d down, %d deleted, %d conflicts",
+			r.Uploaded, r.Downloaded, r.DeletedLocal+r.DeletedRemote, r.Conflicts)
 	}
 }
 
