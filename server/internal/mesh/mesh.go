@@ -78,9 +78,10 @@ type Mesh struct {
 }
 
 type parsedFile struct {
-	mtimeMs int64
-	size    int64
-	links   []RawLink
+	mtimeMs    int64
+	size       int64
+	links      []RawLink
+	categories []string
 }
 
 func New(v *vault.Vault) *Mesh {
@@ -146,6 +147,7 @@ type Snapshot struct {
 	byPath  map[string]*vault.NoteInfo
 	byLower map[string][]string // lower(name) -> paths, shortest first
 	links   map[string][]RawLink
+	cats    map[string][]string // note path -> its frontmatter categories
 }
 
 // Snapshot walks the vault and returns the current link structure.
@@ -159,6 +161,7 @@ func (m *Mesh) Snapshot() (*Snapshot, error) {
 		byPath:  make(map[string]*vault.NoteInfo, len(notes)),
 		byLower: make(map[string][]string, len(notes)),
 		links:   make(map[string][]RawLink, len(notes)),
+		cats:    make(map[string][]string, len(notes)),
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -172,15 +175,23 @@ func (m *Mesh) Snapshot() (*Snapshot, error) {
 
 		if c, ok := m.cache[n.Path]; ok && c.mtimeMs == n.MtimeMs && c.size == n.Size {
 			s.links[n.Path] = c.links
+			s.cats[n.Path] = c.categories
 			continue
 		}
 		content, info, err := m.V.Read(n.Path)
 		if err != nil {
 			continue // deleted between walk and read — the next snapshot heals
 		}
+		// Links and categories are both derived from the same read, and cached
+		// on the same (mtime, size) key: a note's categories live in its
+		// frontmatter, so they change exactly when the file does.
 		links := ParseLinks(content)
-		m.cache[n.Path] = parsedFile{mtimeMs: info.MtimeMs, size: info.Size, links: links}
+		cats := vault.Categories(content)
+		m.cache[n.Path] = parsedFile{
+			mtimeMs: info.MtimeMs, size: info.Size, links: links, categories: cats,
+		}
 		s.links[n.Path] = links
+		s.cats[n.Path] = cats
 	}
 	// Drop cache entries for notes that no longer exist.
 	for p := range m.cache {

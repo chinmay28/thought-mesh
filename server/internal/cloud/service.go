@@ -4,10 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path"
-	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 )
@@ -43,17 +39,17 @@ func (e *ProviderError) Error() string {
 func (e *ProviderError) Unwrap() error { return e.Err }
 
 // Service is the provider-agnostic half of cloud sync: it owns the settings
-// file, keeps the access token fresh, and turns "a run is due" into a vault
-// snapshot sitting in someone's Dropbox.
+// file and the sync state, keeps the access token fresh, and turns "a run is
+// due" into the vault and a Dropbox folder holding the same tree.
 type Service struct {
 	Store    *Store
 	Registry Registry
-	// Archive produces the bytes to upload — a zip of the whole vault
-	// (vault.Zip in practice; a test hands in a stub).
-	Archive func() ([]byte, error)
-	// Unpack replaces the vault's contents from a snapshot's bytes and
-	// reports how many files it wrote (vault.RestoreZip in practice).
-	Unpack func([]byte) (int, error)
+	// State is the bookkeeping a two-way sync needs: what both sides looked
+	// like when they last agreed. Kept beside the settings file, outside the
+	// vault (see state.go).
+	State *StateStore
+	// Vault is the local half — the folder being synced.
+	Vault LocalStore
 	// Clock is the time source for schedules and token expiry; nil means
 	// time.Now. Injected so tests can pin the instant.
 	Clock func() time.Time
@@ -67,11 +63,10 @@ type Service struct {
 }
 
 // NewService wires a service and its in-flight-authorization store.
-func NewService(store *Store, reg Registry,
-	archive func() ([]byte, error), unpack func([]byte) (int, error),
+func NewService(store *Store, state *StateStore, local LocalStore, reg Registry,
 	clock func() time.Time, publicURL string) *Service {
 	s := &Service{
-		Store: store, Registry: reg, Archive: archive, Unpack: unpack,
+		Store: store, State: state, Vault: local, Registry: reg,
 		Clock: clock, PublicURL: strings.TrimRight(publicURL, "/"),
 	}
 	s.pending = newPendingStore(s.Now)
@@ -279,6 +274,15 @@ func (s *Service) Update(frequency *string, folderID, folderPath *string) (*Sett
 			return nil, &ConfigError{Message: "Connect a cloud account before scheduling sync."}
 		}
 	}
+	// Pointing sync at a different folder means everything recorded about the
+	// old one is meaningless: the same path in a new folder is a different
+	// file, and the stale hashes would read as "every note was deleted
+	// remotely". Forget them, and let the first run there work it out fresh.
+	if folderID != nil && (current.FolderID == nil || *current.FolderID != *folderID) {
+		if err := s.State.Reset(*folderID, toISO(now)); err != nil {
+			return nil, err
+		}
+	}
 	return s.Store.UpdateSettings(toISO(now), func(set *Settings) {
 		if frequency != nil {
 			set.Frequency = *frequency
@@ -447,7 +451,7 @@ func (s *Service) CompleteConnect(ctx context.Context, pendingID, code string) (
 		next.LastRunAt = current.LastRunAt
 		next.LastStatus = current.LastStatus
 		next.LastError = current.LastError
-		next.LastFileName = current.LastFileName
+		next.LastResult = current.LastResult
 	}
 	if err := s.Store.SaveSettings(next, toISO(s.Now())); err != nil {
 		return nil, err
@@ -461,6 +465,12 @@ func (s *Service) CompleteConnect(ctx context.Context, pendingID, code string) (
 func (s *Service) Disconnect() (*Settings, error) {
 	cleared := &Settings{Frequency: FrequencyOff}
 	if err := s.Store.SaveSettings(cleared, toISO(s.Now())); err != nil {
+		return nil, err
+	}
+	// The sync state describes a folder this server can no longer reach, and
+	// keeping it would let a reconnection to a *different* account inherit
+	// hashes that describe somebody else's files.
+	if err := s.State.Reset("", toISO(s.Now())); err != nil {
 		return nil, err
 	}
 	return s.Settings()
@@ -543,59 +553,11 @@ func (s *Service) saveToken(token Token) error {
 	return err
 }
 
-// RunResult reports one sync attempt.
-type RunResult struct {
-	FileName string
-	Bytes    int
-}
-
-// Run zips the vault and uploads it to the chosen folder, then records the
-// outcome — success or failure — in the settings and re-bases the schedule.
-// The error is both stored and returned: the scheduler logs it, a manual
-// "sync now" surfaces it to the user.
-func (s *Service) Run(ctx context.Context) (*RunResult, error) {
-	set, err := s.Settings()
-	if err != nil {
-		return nil, err
-	}
-	if !set.Connected() {
-		return nil, &ConfigError{Message: "No cloud account is connected."}
-	}
-	if set.FolderID == nil {
-		return nil, &ConfigError{Message: "Choose a folder in the connected account first."}
-	}
-
-	name := s.fileName()
-	result, runErr := s.upload(ctx, *set.FolderID, name)
-	if err := s.recordRun(name, runErr); err != nil {
-		return nil, err
-	}
-	if runErr != nil {
-		return nil, runErr
-	}
-	return result, nil
-}
-
-func (s *Service) upload(ctx context.Context, folderID, name string) (*RunResult, error) {
-	provider, token, err := s.authorize(ctx)
-	if err != nil {
-		return nil, err
-	}
-	data, err := s.Archive()
-	if err != nil {
-		return nil, err
-	}
-	if err := provider.Upload(ctx, token, folderID, name, data); err != nil {
-		return nil, &ProviderError{Provider: provider.Name(), Err: err}
-	}
-	return &RunResult{FileName: name, Bytes: len(data)}, nil
-}
-
 // recordRun stamps the outcome and schedules the next attempt. A failure is
 // rescheduled on the same interval rather than retried tightly: the usual
 // causes (revoked access, a deleted folder) need a human, and hammering the
 // provider wouldn't help.
-func (s *Service) recordRun(name string, runErr error) error {
+func (s *Service) recordRun(result *SyncResult, runErr error) error {
 	now := s.Now()
 	nowISO := toISO(now)
 	_, err := s.Store.UpdateSettings(nowISO, func(set *Settings) {
@@ -606,11 +568,30 @@ func (s *Service) recordRun(name string, runErr error) error {
 		} else {
 			set.LastStatus = ptr(StatusOK)
 			set.LastError = nil
-			set.LastFileName = ptr(name)
 		}
+		// Even a failed run usually moved some files; what it managed is worth
+		// keeping on screen, and a nil result (the run never started) clears
+		// the counts rather than leaving the previous run's on display.
+		set.LastResult = summarize(result)
 		set.NextRunAt = nextRunISO(now, set.Frequency)
 	})
 	return err
+}
+
+// summarize projects a run onto the small record the settings file keeps.
+func summarize(result *SyncResult) *RunSummary {
+	if result == nil {
+		return nil
+	}
+	return &RunSummary{
+		Uploaded:      result.Uploaded,
+		Downloaded:    result.Downloaded,
+		DeletedLocal:  result.DeletedLocal,
+		DeletedRemote: result.DeletedRemote,
+		Unchanged:     result.Unchanged,
+		Conflicts:     len(result.Conflicts),
+		Failed:        result.Failed,
+	}
 }
 
 // RunIfDue runs a scheduled sync when one is owed. It reports whether it
@@ -623,126 +604,10 @@ func (s *Service) RunIfDue(ctx context.Context) (bool, error) {
 	if !set.due(s.Now()) {
 		return false, nil
 	}
-	if _, err := s.Run(ctx); err != nil {
+	if _, err := s.Sync(ctx); err != nil {
 		return true, err
 	}
 	return true, nil
-}
-
-// fileName stamps the snapshot with the local minute it was taken, so a
-// folder of them sorts chronologically and an hourly schedule doesn't
-// collide.
-func (s *Service) fileName() string {
-	stamp := s.Now().Format("2006-01-02-1504")
-	return "thoughtmesh-" + stamp + ".vault.zip"
-}
-
-// snapshotSuffix is what marks a file in the folder as one of ours. Restore
-// only ever offers and accepts these — the folder may hold anything.
-const snapshotSuffix = ".vault.zip"
-
-// Snapshots lists the vault snapshots in the connected folder, newest first.
-func (s *Service) Snapshots(ctx context.Context) ([]SnapshotFile, error) {
-	set, err := s.Settings()
-	if err != nil {
-		return nil, err
-	}
-	if !set.Connected() {
-		return nil, &ConfigError{Message: "No cloud account is connected."}
-	}
-	if set.FolderID == nil {
-		return nil, &ConfigError{Message: "Choose a folder in the connected account first."}
-	}
-	provider, token, err := s.authorize(ctx)
-	if err != nil {
-		return nil, err
-	}
-	files, err := provider.ListFiles(ctx, token, *set.FolderID)
-	if err != nil {
-		return nil, &ProviderError{Provider: provider.Name(), Err: err}
-	}
-	snapshots := []SnapshotFile{}
-	for _, f := range files {
-		if strings.HasSuffix(f.Name, snapshotSuffix) {
-			snapshots = append(snapshots, f)
-		}
-	}
-	sort.Slice(snapshots, func(i, j int) bool {
-		if snapshots[i].ModifiedMs != snapshots[j].ModifiedMs {
-			return snapshots[i].ModifiedMs > snapshots[j].ModifiedMs
-		}
-		// The stamp in the name breaks ties (and carries the order when a
-		// provider reports no modification time).
-		return snapshots[i].Name > snapshots[j].Name
-	})
-	return snapshots, nil
-}
-
-// RestoreResult reports one completed restore.
-type RestoreResult struct {
-	Snapshot string
-	Files    int
-	// BackupFile is the local pre-restore snapshot of the vault as it was,
-	// written before anything changed — the undo button.
-	BackupFile string
-}
-
-// Restore downloads one snapshot and replaces the vault with its contents.
-//
-// The order is deliberate: download and validate first, then write a LOCAL
-// snapshot of the current vault (beside the settings file, never inside the
-// vault), and only then unpack — which itself stages to a temp directory
-// before touching anything. A failure at any step leaves the vault as it
-// was; a success that turns out to be regretted has the pre-restore backup.
-func (s *Service) Restore(ctx context.Context, fileID string) (*RestoreResult, error) {
-	if !strings.HasSuffix(fileID, snapshotSuffix) {
-		return nil, &ConfigError{Message: "Only " + snapshotSuffix + " snapshots can be restored."}
-	}
-	set, err := s.Settings()
-	if err != nil {
-		return nil, err
-	}
-	if !set.Connected() {
-		return nil, &ConfigError{Message: "No cloud account is connected."}
-	}
-	provider, token, err := s.authorize(ctx)
-	if err != nil {
-		return nil, err
-	}
-	data, err := provider.Download(ctx, token, fileID)
-	if err != nil {
-		return nil, &ProviderError{Provider: provider.Name(), Err: err}
-	}
-
-	backupPath, err := s.writePreRestoreBackup()
-	if err != nil {
-		return nil, fmt.Errorf("pre-restore backup: %w", err)
-	}
-	files, err := s.Unpack(data)
-	if err != nil {
-		return nil, err
-	}
-	return &RestoreResult{
-		Snapshot:   path.Base(fileID),
-		Files:      files,
-		BackupFile: backupPath,
-	}, nil
-}
-
-// writePreRestoreBackup zips the vault as it stands into the settings file's
-// directory (outside the vault, so it can't recurse into later snapshots).
-func (s *Service) writePreRestoreBackup() (string, error) {
-	data, err := s.Archive()
-	if err != nil {
-		return "", err
-	}
-	stamp := s.Now().Format("2006-01-02-150405")
-	backupPath := filepath.Join(filepath.Dir(s.Store.Path),
-		"thoughtmesh-pre-restore-"+stamp+snapshotSuffix)
-	if err := os.WriteFile(backupPath, data, 0o644); err != nil {
-		return "", err
-	}
-	return backupPath, nil
 }
 
 // IsConfigError reports whether err is a user-fixable configuration problem.

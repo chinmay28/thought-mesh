@@ -38,6 +38,17 @@ type ExistsError struct{ Path string }
 
 func (e *ExistsError) Error() string { return fmt.Sprintf("note already exists: %s", e.Path) }
 
+// StaleError reports a write made against a version of a note that has since
+// changed — another device, another editor, a sync pulling something down. It
+// is the optimistic-concurrency half of every write that takes a base mtime,
+// and maps to HTTP 409 so the caller can offer the choice rather than one
+// side silently winning.
+type StaleError struct{ Path string }
+
+func (e *StaleError) Error() string {
+	return "note changed on disk since it was loaded: " + e.Path
+}
+
 // NoteInfo describes a note without its content.
 type NoteInfo struct {
 	Path    string // vault-relative, "/" separated, ends ".md"
