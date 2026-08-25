@@ -214,6 +214,12 @@ Decisions worth keeping:
   the note on tap.
 - **Daily notes are a route** (`/today` → `journal/YYYY-MM-DD.md`), so the tab
   bar can carry them and they're linkable.
+- **One primary action per header, the rest behind "…".** A note is opened to
+  read or write it, so Edit/Done is the only button in the note header;
+  version history, rename and delete live in an overflow menu
+  (`src/components/Menu.tsx`). Four peer buttons in a row wrapped on a phone
+  and left nothing looking like the thing you came to press — and the
+  destructive one sat a thumb's width from the one you actually wanted.
 
 ## 6. Cloud sync (`internal/cloud`)
 

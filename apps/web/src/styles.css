@@ -370,6 +370,65 @@ a {
   font-size: 0.8rem;
 }
 
+/* ------------------------------------------------------------------ *
+ * Overflow menu — a "…" trigger over a short list of secondary actions
+ * ------------------------------------------------------------------ */
+.menu {
+  position: relative;
+  display: inline-flex;
+}
+.menu__trigger {
+  /* Square and thumb-sized: it's an icon, not a word, and it still has to be
+     a comfortable target on a phone. */
+  padding: 0;
+  width: 2.5rem;
+  height: 2.5rem;
+  justify-content: center;
+  font-size: 1.1rem;
+  line-height: 1;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+.menu__panel {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  z-index: 30;
+  min-width: 12rem;
+  display: flex;
+  flex-direction: column;
+  padding: 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+.menu__item {
+  font: inherit;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.55rem 0.65rem;
+  border: 0;
+  border-radius: calc(var(--radius) - 4px);
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.menu__item:hover,
+.menu__item:focus-visible {
+  background: color-mix(in srgb, var(--primary) 16%, transparent);
+}
+.menu__item--danger {
+  color: var(--danger);
+}
+.menu__check {
+  color: var(--primary);
+}
+
 .link-btn {
   font: inherit;
   border: 0;
@@ -584,6 +643,9 @@ a {
   flex-wrap: wrap;
 }
 .note-head__titles {
+  /* Takes the width the actions don't. Long note names wrap inside it rather
+     than pushing the buttons onto a row of their own. */
+  flex: 1 1 10rem;
   min-width: 0;
 }
 .note-head__dir {
@@ -606,6 +668,12 @@ a {
   align-items: center;
   gap: 0.25rem;
   flex: none;
+}
+.note-head__actions .btn--primary {
+  /* Two buttons of different widths sit unevenly; this holds the primary at
+     a size that reads as the main action next to the square "…". */
+  min-width: 5rem;
+  justify-content: center;
 }
 
 /* Rendered markdown. Sized for comfortable phone reading. */
@@ -1134,10 +1202,6 @@ a {
   .tab-bar {
     display: grid;
   }
-  .note-head__actions {
-    width: 100%;
-    justify-content: flex-start;
-  }
   .editor__toolbar {
     top: 3.4rem;
   }
@@ -1239,6 +1303,19 @@ a.chip__label:hover {
   white-space: nowrap;
 }
 
+/* The chip that opens the category editor. Dashed, like a missing wikilink:
+   it names something that isn't there yet rather than something that is. */
+.chip--add {
+  border-style: dashed;
+  background: none;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.chip--add:hover {
+  color: var(--text);
+  border-color: var(--primary);
+}
+
 /* The filter row on the home page. Scrolls sideways rather than wrapping to
    three lines on a phone — the list is browsable, not a form. */
 .cat-filter {
@@ -1249,13 +1326,25 @@ a.chip__label:hover {
   scrollbar-width: thin;
 }
 
-/* A note's categories, under its title. */
+/* A note's categories, under its title. Reading is one wrapping row of chips
+   (the "+" that opens the editor is the last of them); editing stacks, so the
+   picker's own controls don't drift off beside it. */
 .note-cats {
   display: flex;
   align-items: flex-start;
   gap: 0.5rem;
   flex-wrap: wrap;
   margin-bottom: 0.5rem;
+}
+.note-cats--editing {
+  flex-direction: column;
+  align-items: stretch;
+  padding: 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.note-cats--editing > .btn {
+  align-self: flex-start;
 }
 
 /* On a note card in the list: quieter than the chips, since a card is a
