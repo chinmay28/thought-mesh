@@ -330,19 +330,22 @@ export function NotePage() {
               <button
                 type="button"
                 className="chip chip--add"
-                aria-label="Edit this note’s categories"
+                aria-label={
+                  note.categories.length === 0
+                    ? 'Add categories to this note'
+                    : 'Add or remove this note’s categories'
+                }
                 onClick={() => setEditingCategories(true)}
               >
-                {/* The "+" only where it's honest: with nothing listed yet
-                    this chip adds the first one, and with chips beside it the
-                    same tap opens a picker that also removes them. */}
-                {note.categories.length === 0 ? (
-                  <>
-                    <span aria-hidden="true">+</span>Add categories
-                  </>
-                ) : (
-                  'Edit'
-                )}
+                {/* The "+" carries the affordance, so it stays in both states
+                    — with chips beside it the same tap opens a picker that
+                    adds and removes. The accessible name extends the visible
+                    "Add" rather than replacing it, which is the rule for a
+                    control whose label is spoken. */}
+                <span className="chip--add__plus" aria-hidden="true">
+                  +
+                </span>
+                {note.categories.length === 0 ? 'Add categories' : 'Add'}
               </button>
             </li>
           </ul>
