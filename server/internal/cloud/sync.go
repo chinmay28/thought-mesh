@@ -212,6 +212,13 @@ func buildPlan(local map[string]*localFile, remote map[string]*RemoteFile, state
 	for rel := range state.Files {
 		paths[rel] = true
 	}
+	// Contested paths too. A conflict clears the path's file state, so without
+	// this a note deleted on *both* sides while contested would drop out of the
+	// comparison entirely and its conflict would sit there for ever, with
+	// nothing left on either side to settle.
+	for rel := range state.Conflicts {
+		paths[rel] = true
+	}
 	ordered := make([]string, 0, len(paths))
 	for rel := range paths {
 		ordered = append(ordered, rel)
@@ -358,6 +365,11 @@ func (s *Service) applyPlan(ctx context.Context, provider Provider, token, folde
 				continue
 			}
 			s.State.PutBase(uploaded.Hash, data)
+			// The mtime recorded is the walk's, not a fresh stat: if the note
+			// was edited between the walk and the read, a fresh stat would
+			// describe content we did not upload, and the next run's
+			// "unchanged since (mtime, size)" shortcut would skip the edit
+			// entirely. A stale mtime only ever costs one redundant rehash.
 			updates[item.rel] = FileState{
 				Hash: uploaded.Hash, Rev: uploaded.Rev,
 				Size: item.local.size, MtimeMs: item.local.mtimeMs,

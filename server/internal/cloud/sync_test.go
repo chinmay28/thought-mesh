@@ -275,6 +275,43 @@ func TestDeleteVersusEditConflictIsNotMergeable(t *testing.T) {
 	}
 }
 
+// A conflict must not be able to outlive the thing it is about. Recording one
+// clears the path's file state, so a note deleted on *both* sides while
+// contested would otherwise drop out of the comparison and leave a conflict
+// nobody can ever settle.
+func TestConflictClearsWhenBothSidesDeleteThePath(t *testing.T) {
+	f := stdFake()
+	svc, _, v := newTestServiceVault(t, f)
+	connect(t, svc)
+	svc.Update(nil, ptr("/Notes"), ptr("/Notes"))
+	writeNote(t, v, "Idea.md", "start\n")
+	runSyncNow(t, svc)
+
+	writeNote(t, v, "Idea.md", "my version\n")
+	f.put("Idea.md", []byte("their version\n"))
+	if len(runSyncNow(t, svc).Conflicts) != 1 {
+		t.Fatal("expected a conflict")
+	}
+
+	// The argument is settled by both sides losing interest.
+	if err := v.RemoveFile("Idea.md"); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	f.drop("Idea.md")
+
+	result := runSyncNow(t, svc)
+	if len(result.Conflicts) != 0 {
+		t.Fatalf("conflict outlived the note: %+v", result.Conflicts)
+	}
+	conflicts, err := svc.Conflicts()
+	if err != nil {
+		t.Fatalf("Conflicts: %v", err)
+	}
+	if len(conflicts) != 0 {
+		t.Errorf("stored conflict survived: %+v", conflicts)
+	}
+}
+
 // The last race a two-way sync has to survive: somebody writes to Dropbox
 // between our listing and our upload. The conditional write is refused, and
 // that is a conflict — not a failed run.
