@@ -1303,17 +1303,35 @@ a.chip__label:hover {
   white-space: nowrap;
 }
 
-/* The chip that opens the category editor. Dashed, like a missing wikilink:
-   it names something that isn't there yet rather than something that is. */
+/* The chip that opens the category editor. Purple, like every other thing in
+   the app you can press: dashed-and-grey is what a *missing* wikilink looks
+   like here, and borrowed for a button it read as disabled placeholder text
+   rather than a control. Solid fill, primary ink, and a "+" that is part of
+   the label. */
 .chip--add {
-  border-style: dashed;
-  background: none;
-  color: var(--muted);
+  background: color-mix(in srgb, var(--primary) 16%, var(--surface));
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+  color: var(--primary-ink);
+  font-weight: 600;
   white-space: nowrap;
+  /* The chips beside it are baseline-aligned text; this one carries a glyph,
+     so centre it or the "+" hangs low. */
+  align-items: center;
+}
+@media (prefers-color-scheme: dark) {
+  /* --primary-ink is a deep purple meant for the solid button; on a 16% tint
+     over a dark surface it disappears. Use the accent itself. */
+  .chip--add {
+    color: var(--primary);
+  }
 }
 .chip--add:hover {
-  color: var(--text);
+  background: color-mix(in srgb, var(--primary) 28%, var(--surface));
   border-color: var(--primary);
+}
+.chip--add__plus {
+  font-size: 1.05em;
+  line-height: 1;
 }
 
 /* The filter row on the home page. Scrolls sideways rather than wrapping to

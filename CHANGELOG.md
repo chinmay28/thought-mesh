@@ -16,9 +16,9 @@ pushed tag as that release's body — keep the format:
   Rename and Delete side by side, which on a phone wrapped into a row of
   look-alike buttons with Delete a thumb's width from the one you wanted. Edit
   (or Done) is now the only button; version history, rename and delete moved
-  into a "…" menu beside it. The categories control moved too — it's a dashed
-  "+" chip at the end of the note's own categories instead of a separate
-  button, and opening it puts the picker in a panel of its own.
+  into a "…" menu beside it. The categories control moved too — it's a "+ Add"
+  chip at the end of the note's own categories instead of a separate button,
+  and opening it puts the picker in a panel of its own.
 
 - **Your vault is now a git repository, and every version of every note is
   kept.** The server commits it a couple of minutes after you stop writing, and
