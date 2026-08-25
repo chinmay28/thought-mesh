@@ -19,6 +19,7 @@ import { relativeTime } from '../lib/time.ts';
 import { Editor } from '../components/Editor.tsx';
 import { CategoryPicker } from '../components/CategoryPicker.tsx';
 import { NoteHistory } from '../components/NoteHistory.tsx';
+import { Menu } from '../components/Menu.tsx';
 import { restoreNoteVersion } from '../api/history.ts';
 
 const AUTOSAVE_MS = 900;
@@ -257,6 +258,10 @@ export function NotePage() {
           <h1 className="note-head__name">{note.name}</h1>
           <span className="note-head__time">edited {relativeTime(note.mtime_ms)}</span>
         </div>
+        {/* One primary action, everything else behind "…". Edit is what a note
+            is opened for; history, rename and delete are occasional, and side
+            by side in the header they used to wrap into a second row of
+            look-alike buttons with no obvious first move. */}
         <div className="note-head__actions">
           {editing ? (
             <button type="button" className="btn btn--primary" onClick={() => void finishEditing()}>
@@ -267,32 +272,50 @@ export function NotePage() {
               Edit
             </button>
           )}
-          <button
-            type="button"
-            className={`btn btn--ghost${showHistory ? ' btn--active' : ''}`}
-            onClick={() => setShowHistory((open) => !open)}
-          >
-            History
-          </button>
-          <button type="button" className="btn btn--ghost" onClick={() => void onRename()}>
-            Rename
-          </button>
-          <button type="button" className="btn btn--ghost btn--danger" onClick={() => void onDelete()}>
-            Delete
-          </button>
+          <Menu
+            label="More actions for this note"
+            items={[
+              {
+                label: 'Version history',
+                checked: showHistory,
+                onSelect: () => setShowHistory((open) => !open),
+              },
+              { label: 'Rename…', onSelect: () => void onRename() },
+              { label: 'Delete note…', danger: true, onSelect: () => void onDelete() },
+            ]}
+          />
         </div>
       </header>
 
       {/* Categories sit under the title because that's what they describe.
           Read-only until asked for: the common case is glancing at them. */}
-      <section className="note-cats" aria-label="Categories">
+      <section
+        className={`note-cats${editingCategories ? ' note-cats--editing' : ''}`}
+        aria-label="Categories"
+      >
         {editingCategories ? (
-          <CategoryPicker
-            value={note.categories}
-            known={knownCategories}
-            onChange={(next) => void onCategoriesChange(next)}
-          />
+          <>
+            <CategoryPicker
+              value={note.categories}
+              known={knownCategories}
+              onChange={(next) => void onCategoriesChange(next)}
+            />
+            {/* Spelled out rather than a bare "Done": the note's own Done
+                button is a few pixels away, and two controls with the same
+                name doing different things is a maze — worst of all read
+                aloud. */}
+            <button
+              type="button"
+              className="btn btn--ghost btn--small"
+              onClick={() => setEditingCategories(false)}
+            >
+              Done with categories
+            </button>
+          </>
         ) : (
+          /* The control that adds one rides at the end of the list it adds to,
+             as one more chip. A separate button off to the side was a second
+             thing competing with the header a line above it. */
           <ul className="cats__list">
             {note.categories.map((name) => (
               <li key={name} className="chip">
@@ -303,28 +326,27 @@ export function NotePage() {
                 </Link>
               </li>
             ))}
-            {note.categories.length === 0 && (
-              <li className="muted cats__empty">No categories</li>
-            )}
+            <li>
+              <button
+                type="button"
+                className="chip chip--add"
+                aria-label="Edit this note’s categories"
+                onClick={() => setEditingCategories(true)}
+              >
+                {/* The "+" only where it's honest: with nothing listed yet
+                    this chip adds the first one, and with chips beside it the
+                    same tap opens a picker that also removes them. */}
+                {note.categories.length === 0 ? (
+                  <>
+                    <span aria-hidden="true">+</span>Add categories
+                  </>
+                ) : (
+                  'Edit'
+                )}
+              </button>
+            </li>
           </ul>
         )}
-        {/* Spelled out rather than a bare "Edit": the note's own Edit button
-            is a few pixels away, and two controls with the same name doing
-            different things is a maze — worst of all read aloud. */}
-        <button
-          type="button"
-          className="btn btn--ghost btn--small"
-          aria-label={
-            editingCategories ? 'Finish editing categories' : 'Edit this note’s categories'
-          }
-          onClick={() => setEditingCategories((on) => !on)}
-        >
-          {editingCategories
-            ? 'Done'
-            : note.categories.length === 0
-              ? 'Add categories'
-              : 'Edit categories'}
-        </button>
       </section>
 
       {error && <div className="banner banner--warn">{error}</div>}

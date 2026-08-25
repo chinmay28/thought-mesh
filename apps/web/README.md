@@ -17,6 +17,9 @@ Notable corners:
   injection possible; wikilinks are router links). Keep it dependency-free.
 - `src/components/Editor.tsx` — textarea editor with formatting toolbar and
   `[[` autocomplete chips.
+- `src/components/Menu.tsx` — the "…" overflow menu. Secondary actions go here
+  rather than into a header row, so each screen keeps one obvious primary
+  button.
 - `src/components/QuickCapture.tsx` + `src/lib/noteName.ts` — the composer the
   home page opens on. No name field: the first line of the body becomes the
   file stem, and a taken name walks " 2", " 3" … rather than stopping to ask.
