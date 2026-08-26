@@ -2,12 +2,9 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   createNote,
-  listCategories,
   listNotes,
-  type Category,
   type NoteInfo,
 } from '../api/client.ts';
-import { CategoryPicker } from '../components/CategoryPicker.tsx';
 
 /** Create a note: a name, an optional folder, straight into the editor. */
 export function NewNotePage() {
@@ -19,12 +16,9 @@ export function NewNotePage() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [notes, setNotes] = useState<NoteInfo[]>([]);
-  const [categories, setCategories] = useState<string[]>([]);
-  const [knownCategories, setKnownCategories] = useState<Category[]>([]);
 
   useEffect(() => {
     listNotes().then(setNotes).catch(() => {});
-    listCategories().then(setKnownCategories).catch(() => {});
   }, []);
 
   const dirs = useMemo(() => {
@@ -39,7 +33,7 @@ export function NewNotePage() {
     setBusy(true);
     setError('');
     try {
-      const note = await createNote({ name, dir, content: '', categories });
+      const note = await createNote({ name, dir, content: '' });
       navigate(`/notes/${note.path}?edit=1`, { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -67,6 +61,9 @@ export function NewNotePage() {
           <span className="field__label">
             Folder <span className="muted">(optional)</span>
           </span>
+          <span className="field__hint muted">
+            A note’s folder is its category — it has one, and this is it.
+          </span>
           <input
             className="field__input"
             value={dir}
@@ -80,17 +77,6 @@ export function NewNotePage() {
             ))}
           </datalist>
         </label>
-        <div className="field">
-          <span className="field__label">
-            Categories <span className="muted">(optional)</span>
-          </span>
-          <CategoryPicker
-            value={categories}
-            known={knownCategories}
-            onChange={setCategories}
-            disabled={busy}
-          />
-        </div>
         {error && <div className="banner banner--warn">{error}</div>}
         <div className="form__actions">
           <button type="submit" className="btn btn--primary" disabled={busy || !name.trim()}>
@@ -105,10 +91,10 @@ export function NewNotePage() {
         The note becomes a markdown file in your vault
         {dir.trim() ? ` under “${dir.trim()}/”` : ''}. Link to it from any other
         note with <code>[[{name.trim() || 'its name'}]]</code>
-        {categories.length > 0 && (
+        {dir.trim() && (
           <>
-            , and its categories go in the file’s own frontmatter — so they
-            travel with it
+            , and the folder is the category — it travels with the file to any
+            other tool
           </>
         )}
         .

@@ -23,25 +23,23 @@ import (
 // AppVersion is what /api/health and the CLI report.
 var AppVersion = version.String()
 
-// noteInfoJSON is the wire shape of a note without content. `categories` is
-// always an array — the wire contract prefers an empty list to a null, and a
-// note with no categories is the ordinary case, not a missing value.
+// noteInfoJSON is the wire shape of a note without content. There is no
+// `categories` field: a note's folder is its category, so `dir` is the one
+// place that says where a note belongs.
 type noteInfoJSON struct {
-	Path       string   `json:"path"`
-	Name       string   `json:"name"`
-	Dir        string   `json:"dir"`
-	Size       int64    `json:"size"`
-	MtimeMs    int64    `json:"mtime_ms"`
-	Categories []string `json:"categories"`
+	Path string `json:"path"`
+	Name string `json:"name"`
+	// Dir is the note's folder, which is also its category — there is exactly
+	// one and it is the directory the file is in. "" is the vault root.
+	Dir     string `json:"dir"`
+	Size    int64  `json:"size"`
+	MtimeMs int64  `json:"mtime_ms"`
 }
 
-func infoJSON(n *vault.NoteInfo, categories []string) noteInfoJSON {
-	if categories == nil {
-		categories = []string{}
-	}
+func infoJSON(n *vault.NoteInfo) noteInfoJSON {
 	return noteInfoJSON{
 		Path: n.Path, Name: n.Name, Dir: n.Dir,
-		Size: n.Size, MtimeMs: n.MtimeMs, Categories: categories,
+		Size: n.Size, MtimeMs: n.MtimeMs,
 	}
 }
 
@@ -73,10 +71,10 @@ func New(v *vault.Vault, m *mesh.Mesh, cl *cloud.Service, h *history.Repo) http.
 	mux.HandleFunc("GET /api/search", s.search)
 	mux.HandleFunc("GET /api/graph", s.graph)
 	mux.HandleFunc("POST /api/merge", s.mergeText)
-	mux.HandleFunc("GET /api/categories", s.listCategories)
-	mux.HandleFunc("POST /api/categories/rename", s.renameCategory)
-	mux.HandleFunc("POST /api/categories/delete", s.deleteCategory)
-	mux.HandleFunc("POST /api/categories/assign", s.setNoteCategories)
+	mux.HandleFunc("GET /api/folders", s.listFolders)
+	mux.HandleFunc("POST /api/folders/rename", s.renameFolder)
+	mux.HandleFunc("POST /api/folders/delete", s.deleteFolder)
+	mux.HandleFunc("POST /api/folders/move", s.moveNote)
 	mux.HandleFunc("GET /api/history", s.listHistory)
 	mux.HandleFunc("POST /api/history/checkpoint", s.checkpointHistory)
 	mux.HandleFunc("POST /api/history/rollback", s.rollbackHistory)
@@ -179,40 +177,38 @@ func (s *server) health(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-// listNotes goes through the mesh rather than the vault directly, because the
-// list carries each note's categories and those come from the snapshot's
-// cached parse. On an unchanged vault that costs a stat-walk and no reads.
+// listNotes goes through the mesh rather than the vault directly so the walk is
+// the same cached snapshot every other read uses. On an unchanged vault that
+// costs a stat-walk and no reads.
 //
-// `?category=` narrows the list to the notes carrying that category, matched
-// case-insensitively. Filtering server-side keeps the client a transport: it
-// is the same reason search and backlinks live here.
+// `?folder=` narrows the list to one folder, matched case-insensitively and
+// exactly — a folder's subfolders are their own entries in /api/folders, so a
+// browser asks for each level it shows. `?folder=` with an empty value is the
+// vault root, not "no filter". Filtering server-side keeps the client a
+// transport: the same reason search and backlinks live here.
 func (s *server) listNotes(w http.ResponseWriter, r *http.Request) {
 	snap, err := s.m.Snapshot()
 	if err != nil {
 		handleErr(w, err)
 		return
 	}
-	filter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("category")))
+	query := r.URL.Query()
+	folder, hasFolder := query["folder"]
+	filter := ""
+	if hasFolder {
+		filter = strings.ToLower(strings.Trim(strings.TrimSpace(folder[0]), "/"))
+	}
+	// `?folder=` with an empty value is a real filter — the vault root, where
+	// unfiled notes live — so presence of the key decides, not its value.
 	out := make([]noteInfoJSON, 0, len(snap.Notes))
 	for i := range snap.Notes {
 		note := &snap.Notes[i]
-		cats := snap.Categories(note.Path)
-		if filter != "" && !hasCategory(cats, filter) {
+		if hasFolder && strings.ToLower(note.Dir) != filter {
 			continue
 		}
-		out = append(out, infoJSON(note, cats))
+		out = append(out, infoJSON(note))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"notes": out})
-}
-
-// hasCategory reports whether cats holds lowerName, compared case-insensitively.
-func hasCategory(cats []string, lowerName string) bool {
-	for _, cat := range cats {
-		if strings.ToLower(cat) == lowerName {
-			return true
-		}
-	}
-	return false
 }
 
 // fullNote assembles the note + links + backlinks response body.
@@ -234,7 +230,7 @@ func (s *server) fullNote(path string) (*noteJSON, error) {
 		backlinks = []mesh.Backlink{}
 	}
 	return &noteJSON{
-		noteInfoJSON: infoJSON(info, snap.Categories(info.Path)),
+		noteInfoJSON: infoJSON(info),
 		Content:      content,
 		Links:        links,
 		Backlinks:    backlinks,
@@ -252,25 +248,18 @@ func (s *server) getNote(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) createNote(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Path       string   `json:"path"`
-		Name       string   `json:"name"`
-		Dir        string   `json:"dir"`
-		Content    string   `json:"content"`
-		Categories []string `json:"categories"`
+		Path string `json:"path"`
+		Name string `json:"name"`
+		// Dir is the folder to create the note in — which is to say its
+		// category. There is no separate field for one.
+		Dir     string `json:"dir"`
+		Content string `json:"content"`
 	}
 	if err := decodeBody(r, &body); err != nil {
 		handleErr(w, err)
 		return
 	}
 	content := body.Content
-	if len(body.Categories) > 0 {
-		cats, err := vault.NormalizeCategories(body.Categories)
-		if err != nil {
-			handleErr(w, err)
-			return
-		}
-		content = vault.WithCategories(content, cats)
-	}
 	path := body.Path
 	if path == "" {
 		name, err := vault.SanitizeName(body.Name)

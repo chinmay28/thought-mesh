@@ -73,15 +73,21 @@ filesystem watcher feeding the same cache, not persistence.
 - Deletes and renames prune emptied parent folders.
 - `Zip()` snapshots the whole vault (every non-hidden file, not just `.md`,
   structure preserved) — now used for the local pre-sync backups.
-- **Categories are frontmatter** (`frontmatter.go`). A note's categories live
-  in a YAML block at the top of the file itself — the same place Obsidian and
-  every other markdown tool looks — so a category travels with the note and
-  survives leaving this server. There is no registry, no sidecar, and no
-  "create a category" step: a category exists exactly as long as some note
-  declares it. The parser is a deliberately tiny one rather than a YAML
-  dependency; it reads and rewrites one key (`categories:`, in flow or block
-  form; `category:` accepted on read) and copies every other frontmatter line
-  through byte for byte, so metadata written by other tools survives intact.
+- **A folder is a category** (`mesh/folders.go`). A note's category is the
+  directory the file is in — one per note, because a file lives in one
+  directory. Nothing is stored to say so: `ls`, `grep` and Obsidian already
+  agree with the app, and the grouping travels with the file to any machine it
+  is copied to. There is no registry, no sidecar and no "create a folder" step
+  — a folder exists exactly as long as a note is in it.
+
+  This replaced a `categories:` frontmatter key. Two ways to name the same
+  thing meant a note filed under `Money/` and *also* labelled "Money" showed
+  the word twice with nothing to tell the two apart, and "rename" meant
+  different operations depending on which you touched. `frontmatter.go`
+  survives only to migrate vaults off the old key: on startup every note still
+  carrying it is filed into a folder named for its **first** category (the only
+  one that can survive) and the key is removed. The pass is idempotent,
+  checkpoints history first, and logs what it moved and what it had to drop.
 - **File-level access** (`files.go`) sits beside the note API for the callers
   that care about the folder rather than the notes in it — cloud sync mirrors
   the whole tree, attachments included. `CleanFilePath` is looser than
@@ -110,15 +116,21 @@ Derived views, all computed from one consistent `Snapshot()`:
   deduplicated directed edges; per-node in/out degree.
 - **Search** — case-insensitive substring over names (ranked first) and
   content (with the first matching line as a snippet), capped at 100 results.
-- **Categories** — each note's own list, cached on the same `(mtime, size)`
-  key as its links, plus the vault-wide vocabulary with note counts. Derived
-  like everything else here: the files are the only source of truth.
+- **Folders** — the tree the note paths add up to, sorted by path, with the
+  notes directly in each and the total below it. Folders that hold only other
+  folders are included, or a browser could not show a path down to a nested
+  one. Derived like everything else here: the files are the only source of
+  truth, and here they are literally the answer.
 
-**Renaming a category rewrites every note that carries it**, for the same
-reason renaming a note rewrites its wikilinks — a name means the same thing
-everywhere, and leaving half the notes on the old spelling would silently split
-one category into two. Matching is case-insensitive, and renaming onto a name
-already in use merges the two.
+**Renaming a folder moves its notes through `Mesh.Rename`**, one at a time, so
+every wikilink that pointed into it is rewritten exactly as it would be for a
+single note — a folder rename can never leave a link dangling. Deleting a
+folder moves its notes up one level instead of deleting them: "delete this
+category" only ever meant "stop filing things under it", and it means the same
+here. Matching is case-insensitive, renaming onto an existing folder merges the
+two, and a note whose name is already taken at the destination stays where it
+is and is reported rather than overwritten — one blocked note doesn't abort the
+rest of the move.
 
 **Renames rewrite links.** `Mesh.Rename` moves the file and rewrites every
 wikilink that resolved to the old path — preserving aliases and headings,
@@ -138,18 +150,18 @@ statuses 200/201/204/400/404/409 (+502 for cloud). The contract is pinned by
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /api/health` | status, version, note count |
-| `GET /api/notes` | list every note (info only); `?category=` narrows it |
-| `POST /api/notes` | create (`path`, or `name`+`dir`, name sanitized; optional `categories`) |
+| `GET /api/notes` | list every note (info only); `?folder=` narrows it to one folder (`?folder=` alone is the root) |
+| `POST /api/notes` | create (`path`, or `name`+`dir`, name sanitized) |
 | `GET /api/notes/{path}` | content + resolved links + backlinks |
 | `PUT /api/notes/{path}` | save content (optional `base_mtime_ms`) |
 | `DELETE /api/notes/{path}` | delete the file |
 | `POST /api/rename` | move + rewrite referring wikilinks |
 | `GET /api/search?q=` | name matches first, then content matches |
 | `GET /api/graph` | nodes (ghosts included) + deduplicated edges |
-| `GET /api/categories` | the vault's vocabulary, with note counts |
-| `POST /api/categories/assign` | replace one note's categories (optional `base_mtime_ms`) |
-| `POST /api/categories/rename` | rename a category vault-wide (onto an existing one merges) |
-| `POST /api/categories/delete` | strip a category from every note carrying it |
+| `GET /api/folders` | the vault's folder tree, sorted by path, with note counts |
+| `POST /api/folders/move` | file one note under a folder (`""` unfiles it) |
+| `POST /api/folders/rename` | rename a folder and everything under it (onto an existing one merges) |
+| `POST /api/folders/delete` | unfile a folder — its notes move up one level; none are deleted |
 | `POST /api/merge` | three-way merge of `base`/`mine`/`theirs` → merged text + conflict count |
 | `GET /api/history` | the vault's versions, newest first (`available: 0` where there is none) |
 | `GET /api/history/notes/{path}` | the versions that touched one note |
@@ -464,7 +476,7 @@ and the OAuth redirect flow requires it.
   `Unable to create index.lock` and a commit is silently lost.
 - Web tests (vitest, jsdom, globals off) cover the markdown renderer —
   including "raw HTML never renders", "code fences stay literal" and
-  "frontmatter is not content" — the category picker, and the time helpers.
+  "frontmatter is not content" — the folder picker, and the time helpers.
 - Golden rule inherited from the versioning scheme: never assert the literal
   version string; its *shape* is pinned by `internal/version/version_test.go`.
 

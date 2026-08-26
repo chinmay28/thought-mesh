@@ -2,10 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { QuickCapture } from '../components/QuickCapture.tsx';
 import {
-  listCategories,
+  listFolders,
   listNotes,
   search,
-  type Category,
+  type Folder,
   type NoteInfo,
   type SearchResult,
 } from '../api/client.ts';
@@ -18,23 +18,26 @@ const SEARCH_DEBOUNCE_MS = 250;
  * first. The composer leads because capture is what the app gets opened for
  * — reaching it should never cost a tap.
  *
- * `?category=` narrows the list. It lives in the URL rather than in state so a
+ * `?folder=` narrows the list to one folder — which is to say one category,
+ * since they are the same thing. It lives in the URL rather than in state so a
  * filtered view is a place you can go back to, link to, and land on from a
- * category chip on a note.
+ * folder chip on a note. An empty `?folder=` is the vault root (unfiled), which
+ * is a real filter and not the absence of one.
  */
 export function NotesPage() {
   const [notes, setNotes] = useState<NoteInfo[] | null>(null);
-  const [categories, setCategories] = useState<Category[]>([]);
+  const [folders, setFolders] = useState<Folder[]>([]);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[] | null>(null);
   const composeRef = useRef<HTMLTextAreaElement>(null);
   const [params, setParams] = useSearchParams();
-  const category = params.get('category') ?? '';
+  // null means "no filter"; "" means the vault root. They are different views.
+  const folder = params.get('folder');
 
   // "?new=1" is how the "+" action asks for the composer from anywhere else.
   // It is consumed on arrival so a reload doesn't grab focus all over again.
-  // Any other parameter — a category filter — is left alone.
+  // Any other parameter — a folder filter — is left alone.
   useEffect(() => {
     if (!params.has('new')) return;
     composeRef.current?.focus();
@@ -47,20 +50,20 @@ export function NotesPage() {
   useEffect(() => {
     let alive = true;
     setNotes(null);
-    listNotes(category || undefined)
+    listNotes(folder ?? undefined)
       .then((n) => alive && setNotes(n))
       .catch((e: unknown) => alive && setError(e instanceof Error ? e.message : String(e)));
     return () => {
       alive = false;
     };
-  }, [category]);
+  }, [folder]);
 
-  // The vocabulary follows the notes: assigning a category on another screen
-  // and coming back should show it, without a reload.
+  // The tree follows the notes: filing one on another screen and coming back
+  // should show it, without a reload.
   useEffect(() => {
     let alive = true;
-    listCategories()
-      .then((c) => alive && setCategories(c))
+    listFolders()
+      .then((f) => alive && setFolders(f))
       .catch(() => {});
     return () => {
       alive = false;
@@ -87,11 +90,12 @@ export function NotesPage() {
     [notes],
   );
 
-  /** Set (or clear) the category filter, keeping it in the URL. */
-  function setFilter(name: string) {
+  /** Set (or clear) the folder filter, keeping it in the URL. `null` clears it;
+   *  `""` is the vault root, so the two can't share a value. */
+  function setFilter(path: string | null) {
     const next = new URLSearchParams(params);
-    if (name === '') next.delete('category');
-    else next.set('category', name);
+    if (path === null) next.delete('folder');
+    else next.set('folder', path);
     setParams(next, { replace: true });
   }
 
@@ -102,31 +106,50 @@ export function NotesPage() {
         onCreated={(note) => setNotes((prev) => [note, ...(prev ?? [])])}
       />
 
-      {/* The vault's own vocabulary, as a filter. Shown only once something has
-          been categorised — an empty row of chips would just be a claim that a
-          feature exists. */}
-      {categories.length > 0 && (
-        <nav className="cat-filter" aria-label="Filter by category">
+      {/* The vault's folders, as a filter. Shown only once something has been
+          filed — an empty row of chips would just be a claim that a feature
+          exists. "Folders" leads to the page that renames and removes them. */}
+      {folders.some((f) => f.path !== '') && (
+        <nav className="cat-filter" aria-label="Filter by folder">
           <button
             type="button"
-            className={`chip chip--button${category === '' ? ' chip--active' : ''}`}
-            onClick={() => setFilter('')}
+            className={`chip chip--button${folder === null ? ' chip--active' : ''}`}
+            onClick={() => setFilter(null)}
           >
             All
           </button>
-          {categories.map((c) => (
-            <button
-              key={c.name}
-              type="button"
-              className={`chip chip--button${
-                c.name.toLowerCase() === category.toLowerCase() ? ' chip--active' : ''
-              }`}
-              onClick={() => setFilter(c.name)}
-            >
-              {c.name}
-              <span className="cats__count">{c.count}</span>
-            </button>
-          ))}
+          {folders.map((f) =>
+            f.path === '' ? (
+              // Unfiled is only worth offering when something is unfiled.
+              f.count > 0 && (
+                <button
+                  key="__root"
+                  type="button"
+                  className={`chip chip--button${folder === '' ? ' chip--active' : ''}`}
+                  onClick={() => setFilter('')}
+                >
+                  Unfiled
+                  <span className="cats__count">{f.count}</span>
+                </button>
+              )
+            ) : (
+              <button
+                key={f.path}
+                type="button"
+                className={`chip chip--button${
+                  f.path.toLowerCase() === (folder ?? '\u0000').toLowerCase() ? ' chip--active' : ''
+                }`}
+                onClick={() => setFilter(f.path)}
+              >
+                {f.path}
+                <span className="cats__count">{f.count}</span>
+              </button>
+            ),
+          )}
+          <Link className="chip chip--add" to="/folders">
+            <span aria-hidden="true">⋯</span>
+            Manage
+          </Link>
         </nav>
       )}
 
@@ -173,12 +196,14 @@ export function NotesPage() {
         <p className="muted">Loading…</p>
       ) : notes.length === 0 ? (
         <div className="empty">
-          {category ? (
+          {folder !== null ? (
             <>
-              <p className="empty__lead">Nothing in “{category}” yet.</p>
+              <p className="empty__lead">
+                Nothing {folder === '' ? 'unfiled' : `in “${folder}”`} yet.
+              </p>
               <p className="muted">
-                Open a note and add the category to it, or{' '}
-                <button type="button" className="link-btn" onClick={() => setFilter('')}>
+                Open a note and file it there, or{' '}
+                <button type="button" className="link-btn" onClick={() => setFilter(null)}>
                   show every note
                 </button>
                 .
@@ -199,7 +224,7 @@ export function NotesPage() {
         <section aria-label="All notes">
           <h2 className="section-title">
             {notes.length} note{notes.length === 1 ? '' : 's'}
-            {category && <> in “{category}”</>}
+            {folder !== null && (folder === '' ? <> unfiled</> : <> in “{folder}”</>)}
           </h2>
           <ul className="note-list">
             {recent.map((n) => (
@@ -207,12 +232,10 @@ export function NotesPage() {
                 <Link className="note-card" to={`/notes/${n.path}`}>
                   <span className="note-card__name">{n.name}</span>
                   <span className="note-card__meta">
-                    {n.dir && <span className="note-card__dir">{n.dir}</span>}
-                    {n.categories.map((name) => (
-                      <span key={name} className="note-card__cat">
-                        {name}
-                      </span>
-                    ))}
+                    {/* One chip: the folder is the category, so a note filed
+                        in Money/ can no longer also be labelled "Money" and
+                        show the same word twice. */}
+                    {n.dir && <span className="note-card__cat">{n.dir}</span>}
                     <span className="note-card__time">{relativeTime(n.mtime_ms)}</span>
                   </span>
                 </Link>

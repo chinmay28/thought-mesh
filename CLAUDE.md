@@ -94,15 +94,28 @@ add hidden state files to the vault. Path validation is hard at this boundary
 wikilinks or synced filesystems). Writes are write-then-rename so a crash never
 truncates a note; hidden entries (`.git`, `.obsidian`, `.trash`) are skipped.
 
-**Categories are frontmatter, not a database** (`vault/frontmatter.go`). A
-note's categories live in a YAML block at the top of the file itself, where
-Obsidian and every other markdown tool looks — that's the "files are the data"
-rule applied to metadata, and it's why a category survives the note leaving
-this server. There is no registry and no "create a category" step: a category
-exists exactly as long as some note declares it. The parser is deliberately
-tiny rather than a YAML dependency — it rewrites one key and copies every other
-frontmatter line through byte for byte, so metadata other tools wrote survives
-a category change. Keep it that way.
+**A folder IS a category** (`mesh/folders.go`). A note's category is the
+directory the file is actually in — there is exactly one, and it needs no
+metadata to exist: `ls` shows it, Obsidian shows it, and it travels with the
+file to any machine it is copied to. That is the "files ARE the data" rule
+applied to grouping, and it is why there is no registry and no "create a
+category" step: a folder exists exactly as long as a note is in it.
+
+This replaced a `categories:` frontmatter key. Two ways to say the same thing
+meant a note filed under `Money/` and *also* labelled "Money" showed the name
+twice with nothing to tell them apart, and "rename" meant different operations
+depending on which one you touched. The folder won because it was already there.
+The cost, accepted deliberately: **one category per note**, because a file lives
+in one directory. Don't reintroduce a parallel labelling scheme — if per-note
+many-to-many grouping is ever wanted, it should be tags (`#tag`), which are a
+different idea with a different syntax, not a second spelling of this one.
+
+`vault/frontmatter.go` survives as **migration machinery only**. Notes carrying
+the old key are filed into a folder named for their first category on startup
+(`Mesh.MigrateCategoriesToFolders`, called from `cmd/thoughtmesh`); the run is
+idempotent, checkpoints history first, and says in the log what it moved and
+which extra categories it had to drop. Don't wire that parser back into a read
+path — it exists to empty itself out.
 
 `vault/files.go` is file-level access for cloud sync, which mirrors the whole
 folder (attachments included), not just the notes. `CleanFilePath` is looser
@@ -126,10 +139,13 @@ alone) — using the bare name when unambiguous after the move, the full path
 otherwise. That guarantee is why renames must use the API, never a bare file
 move.
 
-Categories are derived here too, cached on the same `(mtime, size)` key as
-links. `Mesh.RenameCategory` rewrites every note carrying a name for the same
-reason `Rename` rewrites wikilinks: leaving half the notes on the old spelling
-would silently split one category into two.
+**Folder edits go through `Mesh.Rename` too**, and that is the whole reason
+they are safe: `RenameFolder` and `DeleteFolder` move notes one at a time
+through the same call that rewrites wikilinks, so a folder rename can never
+leave a link dangling. `DeleteFolder` never deletes a note — it moves the
+contents up one level, because "delete this category" only ever meant "stop
+filing things under it". A destination whose name is already taken is skipped
+and reported rather than overwritten, and the rest of the move still happens.
 
 ### The wire contract is pinned
 

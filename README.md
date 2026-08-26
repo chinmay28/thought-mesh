@@ -17,10 +17,11 @@ app so every device shares one vault:
   app on a phone — no app store, no native build. Editing, autocomplete for
   `[[links]]`, search, and the graph all work one-handed.
 - **Daily notes.** The Today tab opens (or creates) `journal/YYYY-MM-DD.md`.
-- **Categories.** Give a note any number of categories and filter the vault by
-  them. They live in the note's own YAML frontmatter — the same place Obsidian
-  looks — so they travel with the file and are just as visible to `grep`.
-  Rename one and every note carrying it is updated.
+- **Folders are categories.** A note's folder is its category — one per note,
+  and it's the real directory on disk, so `ls`, `grep` and Obsidian all agree
+  with the app. Browse the whole tree, rename a folder (the notes move and the
+  links pointing into it are rewritten) or remove one (its notes move up a
+  level; nothing is deleted).
 - **Two-way Dropbox sync.** Point the server at a folder in your Dropbox and
   the two are kept in step, hourly, daily, weekly, monthly or on demand. The
   folder holds your vault as an ordinary directory tree — same notes, same

@@ -12,13 +12,39 @@ pushed tag as that release's body — keep the format:
 
 ## Unreleased
 
+- **Folders and categories are now one thing: a note's folder is its
+  category.** A note used to be able to sit in `Money/` *and* carry a "Money"
+  category, which showed the same word twice on the same card with nothing to
+  tell the two apart — and "rename" meant different things depending on which
+  one you touched. The folder won, because it was already real: `ls`, `grep`
+  and Obsidian all see it, and it travels with the file with no metadata to
+  keep in step.
+
+  **Your existing categories are converted on the next start.** Each note
+  carrying `categories:` moves into a folder named for its first one and loses
+  the frontmatter key. A note with several keeps the first — a file lives in
+  one directory — and the server's log names every category it had to drop, and
+  every note it left alone because the destination name was taken. History is
+  checkpointed first, so the whole rearrangement is one entry you can roll
+  back. Any other frontmatter your notes carry is copied through untouched.
+
+  The trade is deliberate: **one category per note**. Many-per-note grouping
+  belongs to tags (`#tag`), which are still on the list and are a different
+  idea rather than a second spelling of this one.
+
+- **Browse and manage your folders.** A new Folders tab shows the whole tree
+  with note counts, including folders that only hold other folders. Rename one
+  and its notes move with it — every wikilink pointing into it is rewritten, so
+  nothing dangles. Remove one and its notes move up a level; no note is ever
+  deleted. A note's own page files it, moves it between folders, or unfiles it.
+
 - **The note header is one button again.** A note used to carry Edit, History,
   Rename and Delete side by side, which on a phone wrapped into a row of
   look-alike buttons with Delete a thumb's width from the one you wanted. Edit
   (or Done) is now the only button; version history, rename and delete moved
-  into a "…" menu beside it. The categories control moved too — it's a "+ Add"
-  chip at the end of the note's own categories instead of a separate button,
-  and opening it puts the picker in a panel of its own.
+  into a "…" menu beside it. The control that files a note moved too — it's a
+  chip beside the note's own folder instead of a separate button, and opening
+  it puts the picker in a panel of its own.
 
 - **Your vault is now a git repository, and every version of every note is
   kept.** The server commits it a couple of minutes after you stop writing, and

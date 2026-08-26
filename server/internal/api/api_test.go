@@ -226,123 +226,134 @@ func TestUnknownEndpoint(t *testing.T) {
 	}
 }
 
-// --- categories ---------------------------------------------------------------
+// --- folders ------------------------------------------------------------------
 
-func TestNoteCategoriesLifecycle(t *testing.T) {
+func TestNoteFolderIsItsCategory(t *testing.T) {
 	h := newServer(t)
 
-	// Categories can be set at creation…
-	rec := do(t, h, "POST", "/api/notes",
-		`{"path":"Idea.md","content":"a thought\n","categories":["Ideas","ideas"]}`)
+	// A note's folder comes from its path — there is no second field to set,
+	// and none on the wire that could disagree with it.
+	rec := do(t, h, "POST", "/api/notes", `{"path":"Money/Idea.md","content":"a thought\n"}`)
 	if rec.Code != 201 {
 		t.Fatalf("create = %d: %s", rec.Code, rec.Body.String())
 	}
 	note := decode(t, rec)
-	cats := note["categories"].([]any)
-	if len(cats) != 1 || cats[0] != "Ideas" {
-		t.Fatalf("categories = %v", cats)
+	if note["dir"] != "Money" {
+		t.Fatalf("dir = %v", note["dir"])
 	}
-	// …and they live in the note's own frontmatter, not in a sidecar.
-	if content := note["content"].(string); !strings.HasPrefix(content, "---\ncategories: [Ideas]\n---\n") {
-		t.Errorf("content = %q", content)
+	if _, ok := note["categories"]; ok {
+		t.Error("`categories` is gone from the wire: a folder is the category")
+	}
+	// Content is exactly what was sent — no frontmatter is written any more.
+	if content := note["content"].(string); content != "a thought\n" {
+		t.Errorf("content = %q; want it untouched", content)
 	}
 
-	// A note with none reports an empty array, never a null.
+	// `dir` is "" at the root, never null.
 	do(t, h, "POST", "/api/notes", `{"path":"Plain.md","content":"nothing\n"}`)
 	plain := decode(t, do(t, h, "GET", "/api/notes/Plain.md", ""))
-	if got, ok := plain["categories"].([]any); !ok || len(got) != 0 {
-		t.Errorf("plain note categories = %v", plain["categories"])
+	if plain["dir"] != "" {
+		t.Errorf("root note dir = %v; want \"\"", plain["dir"])
 	}
 
-	// Assigning replaces the list wholesale.
-	rec = do(t, h, "POST", "/api/categories/assign",
-		`{"path":"Idea.md","categories":["Work","Reading list"]}`)
-	if rec.Code != 200 {
-		t.Fatalf("assign = %d: %s", rec.Code, rec.Body.String())
+	// The tree is derived from the notes, with counts. The root is always
+	// present, so "unfiled" is never a case the client has to invent.
+	body := decode(t, do(t, h, "GET", "/api/folders", ""))
+	folders := body["folders"].([]any)
+	if len(folders) != 2 {
+		t.Fatalf("folders = %v", folders)
 	}
-	cats = decode(t, rec)["categories"].([]any)
-	if len(cats) != 2 || cats[0] != "Work" || cats[1] != "Reading list" {
-		t.Errorf("after assign = %v", cats)
+	root := folders[0].(map[string]any)
+	if root["path"] != "" || root["count"] != float64(1) || root["total"] != float64(2) {
+		t.Errorf("root = %v", root)
 	}
-
-	// The vocabulary is derived from the notes, with counts.
-	body := decode(t, do(t, h, "GET", "/api/categories", ""))
-	all := body["categories"].([]any)
-	if len(all) != 2 {
-		t.Fatalf("vocabulary = %v", all)
-	}
-	first := all[0].(map[string]any)
-	if first["name"] != "Reading list" || first["count"] != float64(1) {
-		t.Errorf("first category = %v", first)
+	money := folders[1].(map[string]any)
+	if money["path"] != "Money" || money["name"] != "Money" || money["count"] != float64(1) {
+		t.Errorf("Money = %v", money)
 	}
 
-	// Listing can be narrowed to one category, case-insensitively.
-	notes := decode(t, do(t, h, "GET", "/api/notes?category=work", ""))["notes"].([]any)
-	if len(notes) != 1 || notes[0].(map[string]any)["path"] != "Idea.md" {
+	// Listing narrows to one folder, case-insensitively and exactly.
+	notes := decode(t, do(t, h, "GET", "/api/notes?folder=money", ""))["notes"].([]any)
+	if len(notes) != 1 || notes[0].(map[string]any)["path"] != "Money/Idea.md" {
 		t.Errorf("filtered notes = %v", notes)
 	}
-
-	// Clearing takes the frontmatter block with it.
-	rec = do(t, h, "POST", "/api/categories/assign", `{"path":"Idea.md","categories":[]}`)
-	if got := decode(t, rec)["content"].(string); strings.Contains(got, "categories") {
-		t.Errorf("cleared note = %q", got)
+	// An empty value is the vault root, not "no filter" — that distinction is
+	// what makes "unfiled notes" reachable at all.
+	notes = decode(t, do(t, h, "GET", "/api/notes?folder=", ""))["notes"].([]any)
+	if len(notes) != 1 || notes[0].(map[string]any)["path"] != "Plain.md" {
+		t.Errorf("root notes = %v", notes)
+	}
+	// No parameter at all is still every note.
+	notes = decode(t, do(t, h, "GET", "/api/notes", ""))["notes"].([]any)
+	if len(notes) != 2 {
+		t.Errorf("all notes = %v", notes)
 	}
 }
 
-func TestCategoryRenameAndDelete(t *testing.T) {
+func TestMoveNoteBetweenFolders(t *testing.T) {
 	h := newServer(t)
-	do(t, h, "POST", "/api/notes", `{"path":"A.md","content":"a\n","categories":["Work"]}`)
-	do(t, h, "POST", "/api/notes", `{"path":"B.md","content":"b\n","categories":["work","Ideas"]}`)
+	do(t, h, "POST", "/api/notes", `{"path":"Loose.md","content":"a\n"}`)
 
-	// One rename reaches every note carrying the name, in either spelling.
-	rec := do(t, h, "POST", "/api/categories/rename", `{"from":"Work","to":"Day job"}`)
+	rec := do(t, h, "POST", "/api/folders/move", `{"path":"Loose.md","folder":"Money"}`)
+	if rec.Code != 200 {
+		t.Fatalf("move = %d: %s", rec.Code, rec.Body.String())
+	}
+	moved := decode(t, rec)["note"].(map[string]any)
+	if moved["path"] != "Money/Loose.md" || moved["dir"] != "Money" {
+		t.Errorf("moved = %v", moved)
+	}
+	// "" unfiles it again.
+	rec = do(t, h, "POST", "/api/folders/move", `{"path":"Money/Loose.md","folder":""}`)
+	if got := decode(t, rec)["note"].(map[string]any)["path"]; got != "Loose.md" {
+		t.Errorf("unfiled = %v", got)
+	}
+}
+
+func TestFolderRenameAndDelete(t *testing.T) {
+	h := newServer(t)
+	do(t, h, "POST", "/api/notes", `{"path":"Work/A.md","content":"a\n"}`)
+	do(t, h, "POST", "/api/notes", `{"path":"Work/B.md","content":"see [[A]]\n"}`)
+
+	rec := do(t, h, "POST", "/api/folders/rename", `{"from":"Work","to":"Day job"}`)
 	if rec.Code != 200 {
 		t.Fatalf("rename = %d: %s", rec.Code, rec.Body.String())
 	}
 	body := decode(t, rec)
-	if body["updated_notes"] != float64(2) {
-		t.Errorf("updated = %v", body["updated_notes"])
+	if body["moved_notes"] != float64(2) {
+		t.Errorf("moved = %v", body["moved_notes"])
 	}
-	names := categoryNames(body)
-	if names["Day job"] != 2 || names["Work"] != 0 {
+	if names := folderNames(body); names["Day job"] != 2 || names["Work"] != 0 {
 		t.Errorf("after rename = %v", names)
 	}
 
-	rec = do(t, h, "POST", "/api/categories/delete", `{"name":"Day job"}`)
+	// Deleting a folder unfiles its notes; it never deletes one.
+	rec = do(t, h, "POST", "/api/folders/delete", `{"path":"Day job"}`)
 	if rec.Code != 200 {
 		t.Fatalf("delete = %d: %s", rec.Code, rec.Body.String())
 	}
-	if names = categoryNames(decode(t, rec)); names["Day job"] != 0 || names["Ideas"] != 1 {
+	if names := folderNames(decode(t, rec)); names["Day job"] != 0 {
 		t.Errorf("after delete = %v", names)
 	}
-	// The notes themselves are untouched.
-	if content := decode(t, do(t, h, "GET", "/api/notes/A.md", ""))["content"].(string); content != "a\n" {
-		t.Errorf("note damaged by a category delete: %q", content)
+	if got := decode(t, do(t, h, "GET", "/api/notes/A.md", ""))["content"]; got != "a\n" {
+		t.Errorf("note lost or damaged by a folder delete: %v", got)
 	}
 
-	// An unusable name is a 400, not a silent no-op.
-	if rec = do(t, h, "POST", "/api/categories/rename", `{"from":"Ideas","to":"a, b"}`); rec.Code != 400 {
-		t.Errorf("bad rename target = %d", rec.Code)
+	// A name a path can't hold is a 400, not a silent no-op.
+	do(t, h, "POST", "/api/notes", `{"path":"Keep/C.md","content":"c\n"}`)
+	if rec = do(t, h, "POST", "/api/folders/rename", `{"from":"Keep","to":"a:b"}`); rec.Code != 400 {
+		t.Errorf("bad rename target = %d: %s", rec.Code, rec.Body.String())
 	}
-}
-
-// Assigning a category from a stale screen is the same 409 a stale content save
-// gets — the client then offers the choice rather than one side just winning.
-func TestAssignCategoriesRejectsAStaleBaseMtime(t *testing.T) {
-	h := newServer(t)
-	do(t, h, "POST", "/api/notes", `{"path":"A.md","content":"a\n"}`)
-	rec := do(t, h, "POST", "/api/categories/assign",
-		`{"path":"A.md","categories":["Ideas"],"base_mtime_ms":1}`)
-	if rec.Code != 409 || decode(t, rec)["error"] == "" {
-		t.Errorf("stale assign = %d %s", rec.Code, rec.Body.String())
+	// A folder holding no notes doesn't exist, so renaming it is a 404.
+	if rec = do(t, h, "POST", "/api/folders/rename", `{"from":"Nope","to":"Other"}`); rec.Code != 404 {
+		t.Errorf("missing folder = %d", rec.Code)
 	}
 }
 
-func categoryNames(body map[string]any) map[string]int {
+func folderNames(body map[string]any) map[string]int {
 	out := map[string]int{}
-	for _, entry := range body["categories"].([]any) {
-		c := entry.(map[string]any)
-		out[c["name"].(string)] = int(c["count"].(float64))
+	for _, entry := range body["folders"].([]any) {
+		f := entry.(map[string]any)
+		out[f["path"].(string)] = int(f["count"].(float64))
 	}
 	return out
 }
