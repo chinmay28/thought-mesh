@@ -6,6 +6,7 @@ import { APP_VERSION } from '../version.ts';
 /** Primary destinations, shown in the desktop header and the mobile tab bar. */
 const NAV_ITEMS: { to: string; label: string; icon: ReactNode }[] = [
   { to: '/', label: 'Notes', icon: <NotesIcon /> },
+  { to: '/folders', label: 'Folders', icon: <FolderIcon /> },
   { to: '/graph', label: 'Graph', icon: <GraphIcon /> },
   { to: '/today', label: 'Today', icon: <TodayIcon /> },
   { to: '/sync', label: 'Sync', icon: <SyncIcon /> },
@@ -168,6 +169,15 @@ function NotesIcon() {
       <path d="M6 3h9l4 4v14H6z" />
       <path d="M14 3v5h5" />
       <path d="M9 13h7M9 17h5" />
+    </svg>
+  );
+}
+
+function FolderIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 7a1 1 0 0 1 1-1h5l2 2h8a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z" />
     </svg>
   );
 }

@@ -159,6 +159,14 @@ func run(cfg config) error {
 	historyWatcher.Start(context.Background())
 	logHistory(cfg.history, hist)
 
+	// Folders replaced the old `categories:` frontmatter — they are the same
+	// thing now, and the folder is the one that was already on disk. Convert
+	// anything still carrying the key, after checkpointing so the whole
+	// rearrangement is one entry in the history and undoable as one.
+	if err := migrateCategories(m, hist); err != nil {
+		return fmt.Errorf("migrate categories to folders: %w", err)
+	}
+
 	// Cloud sync settings live OUTSIDE the vault, deliberately: the file
 	// holds OAuth tokens, and the vault is exactly what users copy, sync and
 	// version by other means — a token that rode along in it would leak with
@@ -191,6 +199,44 @@ func run(cfg config) error {
 	log.Printf("[thoughtmesh] %s listening on http://%s:%s (vault: %s)",
 		api.AppVersion, cfg.host, cfg.port, v.Root)
 	return http.ListenAndServe(addr, handler)
+}
+
+// migrateCategories files every note still carrying a `categories:` key into a
+// folder named for its first category, because a folder now *is* a category.
+//
+// It runs on every start and does nothing once the vault holds no such key, so
+// there is no flag to remember and no one-shot command to miss. The checkpoint
+// comes first and only when there is something to do: history is this app's
+// undo button, and a migration that moves files is exactly what it is for.
+func migrateCategories(m *mesh.Mesh, hist *history.Repo) error {
+	snap, err := m.Snapshot()
+	if err != nil {
+		return err
+	}
+	if !snap.HasFrontmatterCategories() {
+		return nil
+	}
+	if _, err := hist.CommitAlways("Before filing categories into folders", "",
+		history.KindCheckpoint); err != nil {
+		// A vault without git still migrates — history is a safety net, not a
+		// precondition. Say so rather than refusing to start.
+		log.Printf("[thoughtmesh] could not checkpoint before migrating: %v", err)
+	}
+	report, err := m.MigrateCategoriesToFolders()
+	if err != nil {
+		return err
+	}
+	if report.Empty() {
+		return nil
+	}
+	log.Printf("[thoughtmesh] categories are folders now: %s", report.Summary())
+	for _, d := range report.Dropped {
+		log.Printf("[thoughtmesh]   dropped extra category — %s", d)
+	}
+	for _, b := range report.Blocked {
+		log.Printf("[thoughtmesh]   left in place, name already taken there — %s", b)
+	}
+	return nil
 }
 
 // openHistory resolves the --history setting. "off" is a working choice, not a

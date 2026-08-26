@@ -87,7 +87,7 @@ Consequences, both ways:
 | Full-text search | ✅ | ✅ server-side, name matches ranked first, line snippets |
 | Search operators (`path:`, `tag:`, regex) | ✅ | ❌ plain case-insensitive substring |
 | Tags (`#tag`) as first-class objects | ✅ | ❌ they're just text (searchable) |
-| Categories on a note | ⚠️ via tags or frontmatter properties | ✅ first-class: assign, change and rename them; the notes list filters by one. Stored as `categories:` in the note's own YAML frontmatter, so Obsidian sees them as a property and `grep` finds them |
+| Categories on a note | ⚠️ via tags or frontmatter properties | ✅ a note's **folder** is its category — one per note, and it's the real directory, so it needs no metadata and looks identical in Obsidian. Browse the tree, rename a folder (files move, links follow) or remove one (notes move up a level) |
 | Quick switcher | ✅ `Ctrl+O` fuzzy | ⚠️ the search box covers it; no dedicated fuzzy switcher |
 
 ## Graph
@@ -154,8 +154,9 @@ network share) whenever you want its editor — the files are the same.
 1. Attachments: serving and rendering vault-local images.
 2. `#heading` scroll targets and per-note local graph.
 3. Tables and a broader markdown subset in the renderer.
-4. Tags as first-class (categories are; `#tag` is still plain text), and
-   search operators.
+4. Tags as first-class — `#tag` is still plain text. This is where
+   many-per-note grouping belongs now that a category is a folder and a note
+   therefore has exactly one; search operators go with it.
 5. A diff view between two versions of a note (today you read one and put it
    back; the comparison is `git diff` in the vault).
 6. Unlinked mentions.

@@ -4,20 +4,20 @@ import {
   ApiError,
   deleteNote,
   getNote,
-  listCategories,
+  listFolders,
   listNotes,
   mergeText,
+  moveNote,
   renameNote,
   saveNote,
-  setNoteCategories,
-  type Category,
+  type Folder,
   type Note,
   type NoteInfo,
 } from '../api/client.ts';
 import { renderMarkdown } from '../lib/markdown.tsx';
 import { relativeTime } from '../lib/time.ts';
 import { Editor } from '../components/Editor.tsx';
-import { CategoryPicker } from '../components/CategoryPicker.tsx';
+import { FolderPicker } from '../components/FolderPicker.tsx';
 import { NoteHistory } from '../components/NoteHistory.tsx';
 import { Menu } from '../components/Menu.tsx';
 import { restoreNoteVersion } from '../api/history.ts';
@@ -35,7 +35,7 @@ type SaveState = 'saved' | 'unsaved' | 'saving' | 'conflict' | 'merged';
 /** One unresolved region, as the merge marks it. */
 const CONFLICT_MARKER = '<<<<<<< ';
 
-/** One note: rendered view, editor, categories, and its linked mentions. */
+/** One note: rendered view, editor, folder, and its linked mentions. */
 export function NotePage() {
   const path = useParams()['*'] ?? '';
   const navigate = useNavigate();
@@ -45,8 +45,8 @@ export function NotePage() {
   const [error, setError] = useState('');
   const [missing, setMissing] = useState(false);
   const [allNotes, setAllNotes] = useState<NoteInfo[]>([]);
-  const [knownCategories, setKnownCategories] = useState<Category[]>([]);
-  const [editingCategories, setEditingCategories] = useState(false);
+  const [knownFolders, setKnownFolders] = useState<Folder[]>([]);
+  const [movingFolder, setMovingFolder] = useState(false);
   const [mergeNotice, setMergeNotice] = useState<number | null>(null);
   const [showHistory, setShowHistory] = useState(false);
 
@@ -84,8 +84,8 @@ export function NotePage() {
     listNotes()
       .then(setAllNotes)
       .catch(() => {});
-    listCategories()
-      .then(setKnownCategories)
+    listFolders()
+      .then(setKnownFolders)
       .catch(() => {});
   }, [path]);
 
@@ -164,30 +164,24 @@ export function NotePage() {
     }
   };
 
-  const onCategoriesChange = async (next: string[]) => {
+  /**
+   * File this note somewhere else. A folder IS the note's category, so this is
+   * the same operation as "change its category" — and because the folder is
+   * the file's real location, changing it moves the file and rewrites the
+   * wikilinks that pointed at it. That's why it navigates: the note's own URL
+   * is its path, so it just changed.
+   */
+  const onFolderChange = async (next: string) => {
     if (!note) return;
-    // Show the new chips at once; the save either confirms them or the error
-    // banner explains why they went back.
-    const previous = note.categories;
-    const previousContent = note.content;
-    setNote({ ...note, categories: next });
+    setError('');
     try {
-      const saved = await setNoteCategories(note.path, next, baseMtime.current);
-      setNote(saved);
-      baseMtime.current = saved.mtime_ms;
-      baseContent.current = saved.content;
-      // Categories live in the frontmatter, so the note's text changed too —
-      // keep an untouched editor in step rather than letting it save back the
-      // version without them.
-      if (draft === previousContent) setDraft(saved.content);
-      listCategories()
-        .then(setKnownCategories)
-        .catch(() => {});
+      const { note: moved } = await moveNote(note.path, next);
+      setMovingFolder(false);
+      navigate(`/notes/${moved.path}`, { replace: true });
     } catch (e) {
-      setNote({ ...note, categories: previous });
       setError(
         e instanceof ApiError && e.status === 409
-          ? 'This note changed elsewhere while you were editing its categories. Reload to see the current version.'
+          ? `A note called “${note.name}” is already in that folder.`
           : e instanceof Error
             ? e.message
             : String(e),
@@ -287,65 +281,53 @@ export function NotePage() {
         </div>
       </header>
 
-      {/* Categories sit under the title because that's what they describe.
-          Read-only until asked for: the common case is glancing at them. */}
+      {/* The note's folder sits under the title because that's what it says
+          about it. One chip, never two: the folder IS the category, so there
+          is no second thing here that could name the same idea twice. */}
       <section
-        className={`note-cats${editingCategories ? ' note-cats--editing' : ''}`}
-        aria-label="Categories"
+        className={`note-cats${movingFolder ? ' note-cats--editing' : ''}`}
+        aria-label="Folder"
       >
-        {editingCategories ? (
+        {movingFolder ? (
           <>
-            <CategoryPicker
-              value={note.categories}
-              known={knownCategories}
-              onChange={(next) => void onCategoriesChange(next)}
+            <FolderPicker
+              value={note.dir}
+              known={knownFolders}
+              onChange={(next) => void onFolderChange(next)}
             />
-            {/* Spelled out rather than a bare "Done": the note's own Done
-                button is a few pixels away, and two controls with the same
-                name doing different things is a maze — worst of all read
-                aloud. */}
+            {/* Spelled out rather than a bare "Cancel": the note's own buttons
+                are a few pixels away, and two controls with the same name
+                doing different things is a maze — worst of all read aloud. */}
             <button
               type="button"
               className="btn btn--ghost btn--small"
-              onClick={() => setEditingCategories(false)}
+              onClick={() => setMovingFolder(false)}
             >
-              Done with categories
+              Leave it where it is
             </button>
           </>
         ) : (
-          /* The control that adds one rides at the end of the list it adds to,
-             as one more chip. A separate button off to the side was a second
-             thing competing with the header a line above it. */
           <ul className="cats__list">
-            {note.categories.map((name) => (
-              <li key={name} className="chip">
-                {/* A category is only useful if it leads somewhere: tapping one
-                    filters the notes list by it. */}
-                <Link className="chip__label" to={`/?category=${encodeURIComponent(name)}`}>
-                  {name}
+            {note.dir && (
+              <li className="chip">
+                {/* A folder is only useful if it leads somewhere: tapping one
+                    shows what else is in it. */}
+                <Link className="chip__label" to={`/?folder=${encodeURIComponent(note.dir)}`}>
+                  {note.dir}
                 </Link>
               </li>
-            ))}
+            )}
             <li>
               <button
                 type="button"
                 className="chip chip--add"
-                aria-label={
-                  note.categories.length === 0
-                    ? 'Add categories to this note'
-                    : 'Add or remove this note’s categories'
-                }
-                onClick={() => setEditingCategories(true)}
+                aria-label={note.dir === '' ? 'File this note in a folder' : 'Move this note to another folder'}
+                onClick={() => setMovingFolder(true)}
               >
-                {/* The "+" carries the affordance, so it stays in both states
-                    — with chips beside it the same tap opens a picker that
-                    adds and removes. The accessible name extends the visible
-                    "Add" rather than replacing it, which is the rule for a
-                    control whose label is spoken. */}
                 <span className="chip--add__plus" aria-hidden="true">
-                  +
+                  {note.dir === '' ? '+' : '→'}
                 </span>
-                {note.categories.length === 0 ? 'Add categories' : 'Add'}
+                {note.dir === '' ? 'File in a folder' : 'Move'}
               </button>
             </li>
           </ul>

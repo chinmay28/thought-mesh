@@ -5,6 +5,7 @@ import { AppLayout } from './app/AppLayout.tsx';
 import { NotesPage } from './pages/NotesPage.tsx';
 import { NotePage } from './pages/NotePage.tsx';
 import { NewNotePage } from './pages/NewNotePage.tsx';
+import { FoldersPage } from './pages/FoldersPage.tsx';
 import { GraphPage } from './pages/GraphPage.tsx';
 import { TodayPage } from './pages/TodayPage.tsx';
 import { SyncPage } from './pages/SyncPage.tsx';
@@ -17,6 +18,7 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <NotesPage /> },
       { path: 'new', element: <NewNotePage /> },
+      { path: 'folders', element: <FoldersPage /> },
       { path: 'graph', element: <GraphPage /> },
       { path: 'today', element: <TodayPage /> },
       { path: 'sync', element: <SyncPage /> },

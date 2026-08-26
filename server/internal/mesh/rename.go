@@ -61,7 +61,11 @@ func (m *Mesh) Rename(oldPath, newPath string) (*vault.NoteInfo, int, error) {
 			continue
 		}
 		rewritten, changed := RewriteLinks(content, resolvesToOld, newTarget)
-		if !changed {
+		// A link can be rewritten to exactly what it already said — moving a
+		// note whose bare name still resolves. Writing that back would bump
+		// the mtime and earn a history commit for a file nobody changed, and
+		// a folder rename does this once per note it moves.
+		if !changed || rewritten == content {
 			continue
 		}
 		if _, err := m.V.Write(ref, rewritten); err != nil {

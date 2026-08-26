@@ -15,20 +15,23 @@ export interface NoteInfo {
   dir: string; // parent folder, "" at the vault root
   size: number;
   mtime_ms: number;
-  /**
-   * The note's categories, in the order it lists them. Always an array —
-   * a note with none is the ordinary case, not a missing value.
-   *
-   * They live in the note's own YAML frontmatter on the server, which is why
-   * changing them changes `content` and `mtime_ms` too.
-   */
-  categories: string[];
 }
 
-/** One category in the vault's vocabulary, with how many notes use it. */
-export interface Category {
+/**
+ * One folder in the vault — which is also one category. There is exactly one
+ * per note (the directory the file is in), so there is no separate list of
+ * categories on a note and no way for the two to disagree.
+ */
+export interface Folder {
+  /** Vault-relative, "/"-separated. "" is the root, where unfiled notes live. */
+  path: string;
+  /** The last segment — what to show in a list. "" for the root. */
   name: string;
+  /** How many folders sit above this one; 0 at the root. */
+  depth: number;
+  /** Notes directly inside; `total` includes every folder below. */
   count: number;
+  total: number;
 }
 
 export interface NoteLink {
@@ -150,10 +153,16 @@ export function health(): Promise<Health> {
   return request('GET', '/api/health');
 }
 
-/** Every note, newest-agnostic (the server sorts by path). `category`
- * narrows the list to the notes carrying it, matched case-insensitively. */
-export async function listNotes(category?: string): Promise<NoteInfo[]> {
-  const query = category ? `?category=${encodeURIComponent(category)}` : '';
+/**
+ * Every note, newest-agnostic (the server sorts by path).
+ *
+ * `folder` narrows the list to exactly that folder, matched case-insensitively;
+ * subfolders are their own entries in `listFolders`, so a browser asks per
+ * level. Passing "" means the vault root (unfiled notes) — which is why this
+ * checks for `undefined` rather than falsiness.
+ */
+export async function listNotes(folder?: string): Promise<NoteInfo[]> {
+  const query = folder === undefined ? '' : `?folder=${encodeURIComponent(folder)}`;
   const body = await request<{ notes: NoteInfo[] }>('GET', `/api/notes${query}`);
   return body.notes;
 }
@@ -164,17 +173,16 @@ export function getNote(path: string): Promise<Note> {
 
 export function createNote(input: {
   path?: string;
-  name?: string;
+  /** The folder to file it in — which is to say its category. */
   dir?: string;
+  name?: string;
   content?: string;
-  categories?: string[];
 }): Promise<Note> {
   return request('POST', '/api/notes', {
     path: input.path ?? '',
     name: input.name ?? '',
     dir: input.dir ?? '',
     content: input.content ?? '',
-    categories: input.categories ?? [],
   });
 }
 
@@ -213,52 +221,53 @@ export function graph(): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> {
 }
 
 // ---------------------------------------------------------------------------
-// Categories
+// Folders
 //
-// There is no "create a category" call, deliberately: a category exists as
-// long as some note declares it in its frontmatter, so assigning one to a note
-// is the only way to make one, and unassigning the last is the only way to lose
-// one. The vault-wide rename and delete exist because a name means the same
-// thing everywhere — leaving half the notes on the old spelling would silently
-// split one category into two.
+// A folder IS a category — the same one thing, stored as the directory the file
+// is in. So there is no "create a folder" call: one exists exactly as long as a
+// note is in it, which is the rule categories always had, now kept by the
+// filesystem instead of by us.
+//
+// Every write here moves files, so every write reports both how many notes
+// moved and how many wikilinks were rewritten to follow them.
 // ---------------------------------------------------------------------------
 
-/** Every category in the vault, sorted by name, with note counts. */
-export async function listCategories(): Promise<Category[]> {
-  const body = await request<{ categories: Category[] }>('GET', '/api/categories');
-  return body.categories;
+/** Result of a folder write: the tree as it now stands, plus what it touched. */
+export interface FolderChange {
+  folders: Folder[];
+  moved_notes: number;
+  updated_notes: number;
+}
+
+/** Every folder in the vault, sorted by path — walk it in order to draw a tree. */
+export async function listFolders(): Promise<Folder[]> {
+  const body = await request<{ folders: Folder[] }>('GET', '/api/folders');
+  return body.folders;
 }
 
 /**
- * Replace one note's categories. Pass baseMtimeMs (the mtime_ms the screen was
- * showing) to get a 409 instead of quietly reverting an edit made elsewhere.
+ * Rename a folder, moving it and everything under it. Renaming onto an existing
+ * folder merges the two. Wikilinks that pointed into it are rewritten.
  */
-export function setNoteCategories(
+export function renameFolder(from: string, to: string): Promise<FolderChange> {
+  return request('POST', '/api/folders/rename', { from, to });
+}
+
+/**
+ * Unfile a folder: its notes move up one level and it stops existing. No note
+ * is ever deleted by this — "delete a category" only meant "stop filing under
+ * it", and it means the same here.
+ */
+export function deleteFolder(path: string): Promise<FolderChange> {
+  return request('POST', '/api/folders/delete', { path });
+}
+
+/** File one note under a folder, keeping its name. "" moves it to the root. */
+export function moveNote(
   path: string,
-  categories: string[],
-  baseMtimeMs?: number,
-): Promise<Note> {
-  const body: { path: string; categories: string[]; base_mtime_ms?: number } = {
-    path,
-    categories,
-  };
-  if (baseMtimeMs !== undefined) body.base_mtime_ms = baseMtimeMs;
-  return request('POST', '/api/categories/assign', body);
-}
-
-/** Rename a category everywhere. Renaming onto an existing name merges them. */
-export function renameCategory(
-  from: string,
-  to: string,
-): Promise<{ categories: Category[]; updated_notes: number }> {
-  return request('POST', '/api/categories/rename', { from, to });
-}
-
-/** Strip a category from every note carrying it. The notes are left alone. */
-export function deleteCategory(
-  name: string,
-): Promise<{ categories: Category[]; updated_notes: number }> {
-  return request('POST', '/api/categories/delete', { name });
+  folder: string,
+): Promise<{ note: NoteInfo; updated_notes: number }> {
+  return request('POST', '/api/folders/move', { path, folder });
 }
 
 // ---------------------------------------------------------------------------
