@@ -12,6 +12,15 @@ pushed tag as that release's body — keep the format:
 
 ## Unreleased
 
+- **The graph draws each cluster properly.** A vault is rarely one connected
+  web — it's several clusters plus a few notes that link to nothing. One force
+  layout over all of that let the clusters repel each other into the corners,
+  and fitting the result on screen shrank every one of them to dust. Each
+  connected cluster now gets its own layout at full size, tiled side by side.
+  A picker above the graph (shown when there's a real choice) focuses one
+  cluster — named for its best-connected note — or the unlinked strays, or
+  shows everything at once.
+
 - **Folders and categories are now one thing: a note's folder is its
   category.** A note used to be able to sit in `Money/` *and* carry a "Money"
   category, which showed the same word twice on the same card with nothing to
