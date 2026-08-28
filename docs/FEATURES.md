@@ -94,10 +94,10 @@ Consequences, both ways:
 
 | Feature | Obsidian | Thought Mesh |
 | --- | --- | --- |
-| Whole-vault graph | ✅ interactive physics | ✅ force-directed, settled up front (calm + cheap on phones), deterministic layout |
+| Whole-vault graph | ✅ interactive physics | ✅ force-directed, settled up front (calm + cheap on phones), deterministic layout; disconnected clusters are laid out separately and tiled, so none of them shrinks to dust |
 | Ghost nodes for missing notes | ✅ | ✅ dashed; tap to create |
 | Local graph (per-note) | ✅ | ❌ |
-| Graph filters/groups/colors | ✅ | ❌ node size reflects degree; that's it |
+| Graph filters/groups/colors | ✅ | ⚠️ cluster picker: view one connected cluster full-size, the unlinked strays, or everything; node size reflects degree |
 
 ## Daily notes, templates, automation
 

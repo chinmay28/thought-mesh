@@ -1,94 +1,21 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { graph, type GraphEdge, type GraphNode } from '../api/client.ts';
+import {
+  connectedComponents,
+  layoutComponents,
+  type PlacedNode,
+} from '../lib/graph.ts';
 
-interface PlacedNode extends GraphNode {
-  x: number;
-  y: number;
-  r: number;
-}
-
-/**
- * Fruchterman–Reingold force layout, run to completion up front (the graph is
- * a picture to explore, not a physics toy — a settled layout is calmer and
- * cheaper on a phone). Deterministic: nodes start on a circle in index order,
- * so the same vault draws the same map every time.
- */
-function layout(nodes: GraphNode[], edges: GraphEdge[]): PlacedNode[] {
-  const n = nodes.length;
-  if (n === 0) return [];
-  const size = Math.max(300, Math.sqrt(n) * 120);
-  const placed: PlacedNode[] = nodes.map((node, i) => {
-    const angle = (2 * Math.PI * i) / n;
-    // Two rings so dense graphs don't start as one perfect (unstable) circle.
-    const radius = (size / 3) * (i % 2 === 0 ? 1 : 0.55);
-    const degree = node.links_in + node.links_out;
-    return {
-      ...node,
-      x: size / 2 + radius * Math.cos(angle),
-      y: size / 2 + radius * Math.sin(angle),
-      r: 7 + Math.min(14, Math.sqrt(degree) * 3),
-    };
-  });
-  const index = new Map(placed.map((p, i) => [p.id, i]));
-  const k = size / Math.sqrt(n) / 1.4; // ideal spring length
-  const iterations = 250;
-  for (let it = 0; it < iterations; it++) {
-    const temp = (size / 10) * (1 - it / iterations);
-    const dx = new Array<number>(n).fill(0);
-    const dy = new Array<number>(n).fill(0);
-    // Repulsion between every pair.
-    for (let i = 0; i < n; i++) {
-      for (let j = i + 1; j < n; j++) {
-        const a = placed[i]!;
-        const b = placed[j]!;
-        let vx = a.x - b.x;
-        let vy = a.y - b.y;
-        let d2 = vx * vx + vy * vy;
-        if (d2 < 0.01) {
-          vx = (i - j) * 0.1;
-          vy = 0.1;
-          d2 = vx * vx + vy * vy;
-        }
-        const d = Math.sqrt(d2);
-        const force = (k * k) / d;
-        dx[i]! += (vx / d) * force;
-        dy[i]! += (vy / d) * force;
-        dx[j]! -= (vx / d) * force;
-        dy[j]! -= (vy / d) * force;
-      }
-    }
-    // Attraction along edges.
-    for (const e of edges) {
-      const i = index.get(e.from);
-      const j = index.get(e.to);
-      if (i === undefined || j === undefined) continue;
-      const a = placed[i]!;
-      const b = placed[j]!;
-      const vx = a.x - b.x;
-      const vy = a.y - b.y;
-      const d = Math.max(0.1, Math.sqrt(vx * vx + vy * vy));
-      const force = (d * d) / k;
-      dx[i]! -= (vx / d) * force;
-      dy[i]! -= (vy / d) * force;
-      dx[j]! += (vx / d) * force;
-      dy[j]! += (vy / d) * force;
-    }
-    for (let i = 0; i < n; i++) {
-      const p = placed[i]!;
-      const d = Math.max(0.1, Math.sqrt(dx[i]! * dx[i]! + dy[i]! * dy[i]!));
-      p.x += (dx[i]! / d) * Math.min(d, temp);
-      p.y += (dy[i]! / d) * Math.min(d, temp);
-    }
-  }
-  return placed;
-}
+/** "all", "unlinked", or the index of a linked cluster as a string. */
+type View = string;
 
 /** The whole vault as a map: notes are dots, wikilinks are the threads. */
 export function GraphPage() {
   const navigate = useNavigate();
   const [data, setData] = useState<{ nodes: GraphNode[]; edges: GraphEdge[] } | null>(null);
   const [error, setError] = useState('');
+  const [view, setView] = useState<View>('all');
 
   useEffect(() => {
     graph()
@@ -96,11 +23,34 @@ export function GraphPage() {
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
   }, []);
 
-  const placed = useMemo(
-    () => (data ? layout(data.nodes, data.edges) : []),
+  const components = useMemo(
+    () => (data ? connectedComponents(data.nodes, data.edges) : []),
     [data],
   );
+  // Lone notes with no links are one "unlinked" group rather than a dropdown
+  // entry each — as a set they're the answer to "what have I never linked?".
+  const linked = useMemo(
+    () => components.filter((c) => c.nodes.length > 1),
+    [components],
+  );
+  const unlinked = useMemo(
+    () => components.filter((c) => c.nodes.length === 1),
+    [components],
+  );
+
+  const shown = useMemo(() => {
+    if (view === 'unlinked' && unlinked.length > 0) return unlinked;
+    const picked = linked[Number(view)];
+    if (view !== 'all' && picked) return [picked];
+    return components;
+  }, [components, linked, unlinked, view]);
+
+  const placed = useMemo(() => layoutComponents(shown), [shown]);
   const byId = useMemo(() => new Map(placed.map((p) => [p.id, p])), [placed]);
+  const shownEdges = useMemo(
+    () => shown.flatMap((c) => c.edges),
+    [shown],
+  );
 
   if (error) {
     return (
@@ -116,7 +66,7 @@ export function GraphPage() {
       </div>
     );
   }
-  if (placed.length === 0) {
+  if (components.length === 0) {
     return (
       <div className="page">
         <div className="empty">
@@ -127,12 +77,32 @@ export function GraphPage() {
     );
   }
 
+  // A tiny cluster viewed alone would otherwise be blown up until two dots
+  // fill the screen; a floor on the viewBox keeps the zoom sane.
   const pad = 40;
-  const minX = Math.min(...placed.map((p) => p.x)) - pad;
-  const minY = Math.min(...placed.map((p) => p.y)) - pad;
-  const maxX = Math.max(...placed.map((p) => p.x)) + pad;
-  const maxY = Math.max(...placed.map((p) => p.y)) + pad;
+  const minViewW = 480;
+  const minViewH = 300;
+  let minX = Math.min(...placed.map((p) => p.x)) - pad;
+  let minY = Math.min(...placed.map((p) => p.y)) - pad;
+  let maxX = Math.max(...placed.map((p) => p.x)) + pad;
+  let maxY = Math.max(...placed.map((p) => p.y)) + pad;
+  if (maxX - minX < minViewW) {
+    const grow = (minViewW - (maxX - minX)) / 2;
+    minX -= grow;
+    maxX += grow;
+  }
+  if (maxY - minY < minViewH) {
+    const grow = (minViewH - (maxY - minY)) / 2;
+    minY -= grow;
+    maxY += grow;
+  }
   const showLabels = placed.length <= 80;
+
+  const noteWord = (n: number) => (n === 1 ? 'note' : 'notes');
+  // The picker earns its row only when there's a real choice: several linked
+  // clusters, or one cluster plus unlinked strays.
+  const showPicker =
+    linked.length > 1 || (linked.length === 1 && unlinked.length > 0);
 
   const open = (node: PlacedNode) => {
     if (node.missing === 1) {
@@ -149,8 +119,31 @@ export function GraphPage() {
         <span className="muted graph-page__stats">
           {data.nodes.filter((n) => n.missing === 0).length} notes ·{' '}
           {data.edges.length} links
+          {components.length > 1 && <> · {components.length} clusters</>}
         </span>
       </h1>
+      {showPicker && (
+        <div className="graph-toolbar">
+          <select
+            className="graph-toolbar__select"
+            aria-label="Cluster to show"
+            value={view}
+            onChange={(e) => setView(e.target.value)}
+          >
+            <option value="all">All clusters</option>
+            {linked.map((c, i) => (
+              <option key={c.nodes[0]!.id} value={String(i)}>
+                {c.label} · {c.noteCount} {noteWord(c.noteCount)}
+              </option>
+            ))}
+            {unlinked.length > 0 && (
+              <option value="unlinked">
+                Unlinked · {unlinked.length} {noteWord(unlinked.length)}
+              </option>
+            )}
+          </select>
+        </div>
+      )}
       <div className="graph-canvas">
         <svg
           viewBox={`${minX} ${minY} ${maxX - minX} ${maxY - minY}`}
@@ -158,7 +151,7 @@ export function GraphPage() {
           role="img"
           aria-label="Note graph"
         >
-          {data.edges.map((e, i) => {
+          {shownEdges.map((e, i) => {
             const a = byId.get(e.from);
             const b = byId.get(e.to);
             if (!a || !b) return null;
@@ -196,6 +189,7 @@ export function GraphPage() {
       <p className="muted graph-page__hint">
         Tap a dot to open its note. Hollow dots are notes that are linked to
         but not written yet — tap to create them.
+        {showPicker && <> Pick a cluster above to see it full size.</>}
       </p>
     </div>
   );

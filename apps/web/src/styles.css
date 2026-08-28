@@ -901,6 +901,19 @@ a {
   font-size: 0.85rem;
   font-weight: 400;
 }
+.graph-toolbar {
+  display: flex;
+  margin-bottom: 0.75rem;
+}
+.graph-toolbar__select {
+  font: inherit;
+  max-width: 100%;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: inherit;
+}
 .graph-canvas {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -1213,7 +1226,8 @@ a {
   .quick-note__text,
   .field__input,
   .searchbar__input,
-  .cloud__select {
+  .cloud__select,
+  .graph-toolbar__select {
     font-size: 16px;
   }
 }
