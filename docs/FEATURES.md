@@ -62,6 +62,7 @@ Consequences, both ways:
 | Links to not-yet-created notes | ✅ styled, click to create | ✅ dashed style, tap to create (prefilled) |
 | Rename updates links everywhere | ✅ in-app option | ✅ always, server-side — aliases/headings preserved, code fences untouched, falls back to full path when the new name is ambiguous |
 | Link autocomplete when typing `[[` | ✅ | ✅ suggestion chips, keyboard + touch |
+| Link existing text by selecting it | ⚠️ select, then type `[[` | ✅ "Add backlinks" mode: select a word or phrase and it becomes `[[…]]` (saved at once, with undo); select inside a link to unlink it |
 | Markdown-style `[text](url)` links | ✅ | ✅ external links; `![img](url)` for remote images |
 | Embeds / transclusion `![[Note]]` | ✅ | ❌ renders as a normal link |
 
@@ -74,6 +75,7 @@ Consequences, both ways:
 | Tables | ✅ incl. editor | ❌ rendered as text |
 | Callouts, footnotes, math (LaTeX), Mermaid | ✅ | ❌ |
 | Formatting toolbar (mobile) | ✅ | ✅ bold/italic/code/heading/list/task/quote/wikilink |
+| Copy a note | ✅ select all / copy | ✅ "Copy text" (the markdown) and "Copy as code" (wrapped in a fence) from the note's ⋯ menu — works over plain-HTTP LAN too |
 | Quick capture | ⚠️ new-note command, then a name | ✅ the home page opens on a composer — type, Save, keep typing; the first line names the file |
 | Autosave | ✅ | ✅ ~1s debounce, with saved/saving status |
 | Edit conflict safety | sync-dependent (conflict copies) | ✅ mtime check → 409 → explicit "load theirs / keep mine" |
