@@ -20,9 +20,15 @@ import { Editor } from '../components/Editor.tsx';
 import { FolderPicker } from '../components/FolderPicker.tsx';
 import { NoteHistory } from '../components/NoteHistory.tsx';
 import { Menu } from '../components/Menu.tsx';
+import { Linker } from '../components/Linker.tsx';
 import { restoreNoteVersion } from '../api/history.ts';
+import { copyText } from '../lib/clipboard.ts';
+import { fenceAsCode, toggleWikilink } from '../lib/linkify.ts';
 
 const AUTOSAVE_MS = 900;
+
+/** How long a "Copied" confirmation stays up. */
+const TOAST_MS = 2200;
 
 /**
  * `merged` is a fourth state, not a flavour of `unsaved`: a merge that still
@@ -49,6 +55,13 @@ export function NotePage() {
   const [movingFolder, setMovingFolder] = useState(false);
   const [mergeNotice, setMergeNotice] = useState<number | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [toast, setToast] = useState('');
+  // "Add backlinks" mode: select words to wrap them in [[ ]]. `linkUndo` is
+  // the content before the last change, so a mis-selection is one tap away
+  // from being taken back.
+  const [linking, setLinking] = useState(false);
+  const [linkNotice, setLinkNotice] = useState('');
+  const [linkUndo, setLinkUndo] = useState<string | null>(null);
 
   const editing = params.get('edit') === '1';
   const [draft, setDraft] = useState('');
@@ -80,6 +93,17 @@ export function NotePage() {
   }, [path]);
 
   useEffect(load, [load]);
+  // A new note starts in reading mode, whatever the last one was doing.
+  useEffect(() => {
+    setLinking(false);
+    setLinkNotice('');
+    setLinkUndo(null);
+  }, [path]);
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(''), TOAST_MS);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
   useEffect(() => {
     listNotes()
       .then(setAllNotes)
@@ -189,6 +213,64 @@ export function NotePage() {
     }
   };
 
+  /** Copy what the note says right now — the draft, mid-edit. */
+  const onCopy = async (asCode: boolean) => {
+    if (!note) return;
+    const text = editing ? draft : note.content;
+    try {
+      await copyText(asCode ? fenceAsCode(text) : text);
+      setToast(asCode ? 'Copied as a code block' : 'Copied note text');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const startLinking = async () => {
+    if (editing) await finishEditing();
+    setShowHistory(false);
+    setLinkNotice('');
+    setLinkUndo(null);
+    setLinking(true);
+  };
+
+  /**
+   * Write a linking change straight to the server. It goes through the same
+   * optimistic-concurrency check as an editor save, so a note that moved on
+   * another device is reloaded rather than overwritten.
+   */
+  const saveLinked = async (content: string, notice: string, undo: string | null) => {
+    try {
+      const saved = await saveNote(path, content, baseMtime.current);
+      baseMtime.current = saved.mtime_ms;
+      baseContent.current = saved.content;
+      setNote(saved);
+      setDraft(saved.content);
+      setLinkNotice(notice);
+      setLinkUndo(undo);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        setLinkNotice('This note changed elsewhere — reloaded it. Try that again.');
+        setLinkUndo(null);
+        load();
+      } else {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    }
+  };
+
+  const onPickLink = (start: number, end: number) => {
+    if (!note) return;
+    const edit = toggleWikilink(note.content, start, end);
+    if (edit.kind === 'none') return;
+    if (edit.kind === 'refused') {
+      setLinkNotice(edit.reason);
+      setLinkUndo(null);
+      return;
+    }
+    const notice = edit.kind === 'link' ? `Linked [[${edit.target}]]` : `Unlinked “${edit.target}”`;
+    void saveLinked(edit.content, notice, note.content);
+  };
+
   const onRename = async () => {
     if (!note) return;
     const current = note.path.replace(/\.md$/i, '');
@@ -261,6 +343,10 @@ export function NotePage() {
             <button type="button" className="btn btn--primary" onClick={() => void finishEditing()}>
               Done
             </button>
+          ) : linking ? (
+            <button type="button" className="btn btn--primary" onClick={() => setLinking(false)}>
+              Done
+            </button>
           ) : (
             <button type="button" className="btn btn--primary" onClick={() => setEditing(true)}>
               Edit
@@ -269,6 +355,13 @@ export function NotePage() {
           <Menu
             label="More actions for this note"
             items={[
+              { label: 'Copy text', onSelect: () => void onCopy(false) },
+              { label: 'Copy as code', onSelect: () => void onCopy(true) },
+              {
+                label: 'Add backlinks',
+                checked: linking,
+                onSelect: () => (linking ? setLinking(false) : void startLinking()),
+              },
               {
                 label: 'Version history',
                 checked: showHistory,
@@ -400,7 +493,34 @@ export function NotePage() {
         </div>
       )}
 
-      {editing ? (
+      {linking && !editing ? (
+        <section className="linker-mode" aria-label="Add backlinks">
+          <div className="linker-mode__hint" role="status">
+            <span>
+              {linkNotice || (
+                <>
+                  Select a word or phrase to turn it into a <code>[[link]]</code>. Select inside a
+                  link to remove it.
+                </>
+              )}
+            </span>
+            {linkUndo !== null && (
+              <button
+                type="button"
+                className="btn btn--small"
+                onClick={() => void saveLinked(linkUndo, 'Undone', null)}
+              >
+                Undo
+              </button>
+            )}
+          </div>
+          <Linker
+            content={note.content}
+            resolves={(target) => resolver(target) !== null}
+            onPick={onPickLink}
+          />
+        </section>
+      ) : editing ? (
         <>
           <Editor value={draft} onChange={setDraft} notes={allNotes} currentPath={note.path} />
           <div className="editor-status" role="status">
@@ -429,6 +549,12 @@ export function NotePage() {
             })
           )}
         </article>
+      )}
+
+      {toast && (
+        <div className="toast" role="status">
+          {toast}
+        </div>
       )}
 
       <section className="backlinks" aria-label="Linked mentions">
