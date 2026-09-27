@@ -438,7 +438,9 @@ the notes went to Dropbox. So is a run the user annotated.
   a hardened systemd service, from source or from a release asset. Idempotent
   and data-safe: the vault lives outside the source tree, is tar-snapshotted
   before every upgrade while the service is quiesced, and a failed health
-  check rolls back to the previous commit or binary. The reference unit is
+  check rolls back to the previous commit or binary. `--uninstall` undoes the
+  service and the installed code but never the data directory — deleting
+  notes is left to a command the user types. The reference unit is
   `deploy/thoughtmesh.service`.
 
 ## 9. Trust model

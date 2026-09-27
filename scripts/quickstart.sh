@@ -6,6 +6,10 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/chinmay28/thought-mesh/main/scripts/quickstart.sh | sudo bash
 #
+# and the same line with a flag takes it away again, leaving your notes:
+#
+#   curl -fsSL https://raw.githubusercontent.com/chinmay28/thought-mesh/main/scripts/quickstart.sh | sudo bash -s -- --uninstall
+#
 # Two ways to get the binary — THOUGHTMESH_INSTALL picks one:
 #
 #   source   (default) clone the repo and build it here. Needs Node and Go at
@@ -57,6 +61,10 @@
 #   INSTALL_GO            auto | never            install Go if missing/old (default: auto; source mode, build-time only)
 #   BACKUP_KEEP           pre-upgrade backups kept (default: 10)
 #
+# Uninstall with the same variables you installed with, so it finds the same
+# paths. It stops and removes the service and the installed code, and keeps
+# $DATA_DIR — the vault (and its git history), cloud sync settings, backups.
+#
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
@@ -81,6 +89,14 @@ if [ "$(id -u)" -ne 0 ]; then
   die "Run as root: curl -fsSL .../quickstart.sh | sudo bash   (or: sudo ./scripts/quickstart.sh)"
 fi
 command -v systemctl >/dev/null 2>&1 || die "systemd is required (no systemctl found)."
+
+# Parsed before anything is installed, so an uninstall never fetches a toolchain
+# or a line of code.
+case "${1:-}" in
+  --uninstall) UNINSTALL=1 ;;
+  "")          UNINSTALL=0 ;;
+  *)           die "Unknown option: $1 (only --uninstall is supported)" ;;
+esac
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -111,6 +127,48 @@ UNIT_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 # server/go.mod pins the real toolchain, which Go fetches automatically.
 GO_MIN_MINOR=23
 GO_INSTALL_VERSION="1.25.0"
+
+# ---------------------------------------------------------------------------
+# Uninstall: undo what the steps below install, and nothing else
+# ---------------------------------------------------------------------------
+# Everything here tolerates being already gone, so it is safe to run twice or
+# on a machine that never had Thought Mesh. It deliberately ignores
+# THOUGHTMESH_INSTALL: source and release installs differ only in whether
+# $PREFIX holds src/ or bin/, and removing both covers an install made in
+# either mode (or switched between them). Each is removed only as far as it
+# is recognisably ours — the three binary names, a checkout whose package.json
+# is Thought Mesh's — never $PREFIX wholesale, so a data dir placed inside the
+# prefix survives, and THOUGHTMESH_PREFIX=/usr can't take /usr/bin with it.
+# A checkout built in place (sudo ./scripts/quickstart.sh) is the
+# user's own tree and is left alone. Node and Go stay too — other things on
+# the machine may be using them, and the running service never needed them.
+if [ "$UNINSTALL" -eq 1 ]; then
+  log "Stopping and removing the Thought Mesh service"
+  systemctl disable --now "${SERVICE_NAME}.service" >/dev/null 2>&1 || true
+  rm -f "$UNIT_PATH"
+  # A drop-in (e.g. adding --dropbox-client-id) only configures this unit;
+  # left behind it would quietly reconfigure a reinstall.
+  rm -rf "${UNIT_PATH}.d"
+  systemctl daemon-reload
+  systemctl reset-failed "${SERVICE_NAME}.service" >/dev/null 2>&1 || true
+  ok "service removed"
+
+  rm -f "$PREFIX/bin/thoughtmesh" "$PREFIX/bin/thoughtmesh.prev" "$PREFIX/bin/thoughtmesh.new"
+  rmdir "$PREFIX/bin" 2>/dev/null || true
+  if grep -q '"name": *"thought-mesh"' "$PREFIX/src/package.json" 2>/dev/null; then
+    rm -rf "${PREFIX:?}/src"
+  fi
+  rmdir "$PREFIX" 2>/dev/null || true
+  ok "installed code removed ($PREFIX)"
+
+  echo
+  log "Removed. Your notes are still at $DATA_DIR:"
+  printf '  %-10s %s\n' "vault"   "$VAULT_DIR (markdown files + .git version history)"
+  printf '  %-10s %s\n' "settings" "$DATA_DIR/thoughtmesh-cloud.json (cloud sync, if used)"
+  printf '  %-10s %s\n' "backups" "$BACKUP_DIR"
+  log "Delete them with: sudo rm -rf $DATA_DIR && sudo userdel $SVC_USER"
+  exit 0
+fi
 
 # If this script is being run from inside an existing checkout (sudo ./scripts/
 # quickstart.sh) rather than piped from curl, build that checkout in place.

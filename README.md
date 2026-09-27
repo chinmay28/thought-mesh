@@ -105,6 +105,15 @@ Prefer the prebuilt static binary from a GitHub release (no toolchain at all):
 curl -fsSL https://raw.githubusercontent.com/chinmay28/thought-mesh/main/scripts/quickstart.sh | sudo THOUGHTMESH_INSTALL=release bash
 ```
 
+To uninstall, run the same line with `--uninstall`. It stops and removes the
+service and the installed code, and keeps your data — the vault (with its
+version history), cloud sync settings and backups under `/var/lib/thoughtmesh`
+— printing the command to delete those too if you want them gone:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/chinmay28/thought-mesh/main/scripts/quickstart.sh | sudo bash -s -- --uninstall
+```
+
 See the header of [`scripts/quickstart.sh`](./scripts/quickstart.sh) for every
 knob (port, vault location, service user, pinning a branch or release).
 
