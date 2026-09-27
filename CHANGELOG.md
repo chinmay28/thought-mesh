@@ -12,6 +12,13 @@ pushed tag as that release's body — keep the format:
 
 ## Unreleased
 
+- **One line uninstalls, too.** The quick-start installer takes
+  `--uninstall` (`curl … | sudo bash -s -- --uninstall`): it stops and
+  removes the service and the installed code, and leaves the vault, its
+  history, cloud sync settings and backups where they are, with the command
+  to delete them printed at the end. Running it twice, or with nothing
+  installed, is harmless.
+
 - **The graph draws each cluster properly.** A vault is rarely one connected
   web — it's several clusters plus a few notes that link to nothing. One force
   layout over all of that let the clusters repel each other into the corners,
