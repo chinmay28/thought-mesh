@@ -66,7 +66,7 @@ thought-mesh/
 │   └── internal/             #   vault (file store), mesh (link index), cloud (Dropbox sync), HTTP layer
 ├── apps/
 │   └── web/                  # @thoughtmesh/web — installable PWA client (Vite + React)
-├── scripts/                  # version.mjs (the one version assembler), quickstart.sh (installer)
+├── scripts/                  # version.mjs (the one version assembler), quickstart.sh (install / uninstall)
 └── deploy/                   # reference systemd unit
 ```
 
